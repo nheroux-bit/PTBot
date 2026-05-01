@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -47,7 +48,7 @@ class AgentTask(BaseModel):
 class DealCandidate(BaseModel):
     """Candidate acquisition identified by a Pass 1 scout."""
 
-    model_config = ConfigDict(strict=True, extra="forbid", frozen=True)
+    model_config = ConfigDict(strict=True, extra="ignore", frozen=True)
 
     target: str = Field(..., min_length=1)
     acquirer: str = Field(..., min_length=1)
@@ -68,12 +69,62 @@ class DealCandidate(BaseModel):
             return value
         if isinstance(value, list):
             return tuple(str(item) for item in value)
-        raise TypeError("value must be a JSON array")
+        if isinstance(value, dict):
+            return tuple(f"{key}: {item}" for key, item in value.items())
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return ()
+            return tuple(item.strip() for item in stripped.split(",") if item.strip())
+        raise TypeError("value must be a JSON array, object, or comma-separated string")
 
     def key(self) -> str:
         """Return a normalized deduplication key."""
-        normalized = f"{self.target}|{self.acquirer}".lower()
+        normalized = f"{self._normalize_party(self.target)}|{self._normalize_party(self.acquirer)}"
         return "".join(char for char in normalized if char.isalnum() or char == "|")
+
+    @staticmethod
+    def _normalize_party(value: str) -> str:
+        """Normalize common legal/geographic suffixes for duplicate detection."""
+        value = re.sub(r"\([^)]*\)", " ", value.lower())
+        value = re.sub(
+            r"\b(inc|corp|corporation|llc|ltd|limited|group|holdings|co|company|assets?)\b",
+            " ",
+            value,
+        )
+        value = re.sub(r"\b(nasdaq|nyse|otc|otcqb|otcqx|tse)\b[:\w.]*", " ", value)
+        value = re.sub(r"[^a-z0-9]+", " ", value)
+        return " ".join(value.split())
+
+    def standard_multiple_count(self) -> int:
+        """Return the number of listed standard valuation multiples."""
+        standard_patterns = (
+            r"\bev\s*[/_-]\s*(revenue|sales|arr|ebitda|ebit|bookings|gross[ _-]?profit)(\b|_)",
+            r"\bev[_-](ltm|ntm|ttm|fy|q\d)?[_-]?(revenue|sales|arr|ebitda|ebit)(\b|_)",
+            r"\benterprise value\s*[/_-]\s*(revenue|sales|arr|ebitda|ebit|bookings)\b",
+            r"\b(price|equity value)\s*[/_-]\s*(revenue|sales|earnings|book|tangible book)\b",
+            r"\bp\s*/\s*e\b",
+            r"\bprice\s*/\s*earnings\b",
+            r"\bpremium\b|premium[_-]to",
+        )
+        excluded_patterns = (
+            r"\bgoodwill\b",
+            r"\bintangibles?\b",
+            r"\bpatents?\b",
+            r"\blicens(e|ing)\b",
+            r"\bbacklog\b",
+            r"\bpipeline\b",
+            r"\btam\b",
+            r"\bnote:",
+        )
+        count = 0
+        for item in self.multiples:
+            text = item.lower()
+            if any(re.search(pattern, text) for pattern in excluded_patterns):
+                continue
+            if any(re.search(pattern, text) for pattern in standard_patterns):
+                count += 1
+        return count
 
     def multiple_count(self) -> int:
         """Return the number of explicitly listed multiples."""
@@ -81,11 +132,7 @@ class DealCandidate(BaseModel):
 
     def qualifies(self, min_multiples: int) -> bool:
         """Return whether this deal satisfies the disclosed/computable multiples filter."""
-        if self.multiple_count() >= min_multiples:
-            return True
-        return min_multiples == 1 and (
-            self.multiples_disclosed or self.computed_multiples_available
-        )
+        return self.standard_multiple_count() >= min_multiples
 
 
 class AgentRunResult(BaseModel):

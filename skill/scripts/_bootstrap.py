@@ -10,7 +10,7 @@ from pathlib import Path
 def ensure_ptbot_importable() -> None:
     """Re-exec into the project venv when available, then expose src on sys.path."""
     project_root = Path(
-        os.environ.get("PTBOT_PROJECT_ROOT", "/Users/heroux/Desktop/Projects/PTBot")
+        os.environ.get("PTBOT_PROJECT_ROOT", "/Users/heroux/projects/PTBot")
     )
     venv_root = project_root / ".venv"
     venv_python = project_root / ".venv" / "bin" / "python"

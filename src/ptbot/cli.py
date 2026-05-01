@@ -17,7 +17,13 @@ from .prompt_builder import build_config
 def build_parser() -> argparse.ArgumentParser:
     """Build the PTBot argument parser."""
     parser = argparse.ArgumentParser(description="Run precedent transaction research.")
-    parser.add_argument("--sector", required=True, help="Sector or industry vertical")
+    parser.add_argument(
+        "--sector",
+        "--industry",
+        dest="sector",
+        required=True,
+        help="Sector or industry vertical",
+    )
     parser.add_argument("--geography", required=True, help="Geographic scope")
     parser.add_argument("--start-date", required=True, help="Start date (YYYY-MM-DD)")
     parser.add_argument("--end-date", required=True, help="End date (YYYY-MM-DD)")

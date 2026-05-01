@@ -37,7 +37,8 @@ def strip_markdown(text: str) -> str:
     text = re.sub(r"\*\*(.*?)\*\*", r"\1", text)
     text = re.sub(r"`(.*?)`", r"\1", text)
     text = re.sub(r"\*(.*?)\*", r"\1", text)
-    return sanitize_text(text)
+    text = sanitize_text(text)
+    return re.sub(r"(\S{80})", r"\1 ", text)
 
 
 class ReportPDF(FPDF):
@@ -108,6 +109,7 @@ def markdown_to_pdf(markdown_path: Path, pdf_path: Path, title: str) -> None:
             continue
         pdf.set_font("Helvetica", "", 10)
         pdf.set_text_color(26, 26, 26)
+        pdf.set_x(pdf.l_margin)
         pdf.multi_cell(0, 5, strip_markdown(line))
         pdf.ln(1)
 

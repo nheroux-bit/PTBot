@@ -54,12 +54,32 @@ def test_dedupe_merges_multiples_and_sources() -> None:
     assert deduped[0].source_urls == ("https://a.example", "https://b.example")
 
 
+def test_dedupe_merges_parenthetical_and_legal_suffix_variants() -> None:
+    """Duplicate names with location/legal suffix variants should merge."""
+    first = DealCandidate(
+        target="Performant Healthcare, Inc.",
+        acquirer="Machinify (New Mountain Capital portfolio co.)",
+        multiples=("4.4x EV/Revenue",),
+    )
+    second = DealCandidate(
+        target="Performant Healthcare, Inc. (Plantation, FL)",
+        acquirer="Machinify",
+        multiples=("27.0x EV/EBITDA",),
+    )
+
+    deduped = dedupe_deals([first, second])
+
+    assert len(deduped) == 1
+    assert deduped[0].multiples == ("4.4x EV/Revenue", "27.0x EV/EBITDA")
+
+
 def test_filter_qualified_deals_removes_deals_without_multiples() -> None:
     """Deals without disclosed or computable multiples are excluded."""
     qualified = DealCandidate(
         target="A",
         acquirer="B",
         multiples_disclosed=True,
+        multiples=("5.0x EV/Revenue",),
         source_urls=("https://example.com",),
     )
     excluded = DealCandidate(target="C", acquirer="D")
@@ -67,6 +87,32 @@ def test_filter_qualified_deals_removes_deals_without_multiples() -> None:
     result = filter_qualified_deals([qualified, excluded], min_multiples=1)
 
     assert result == [qualified]
+
+
+def test_filter_qualified_deals_rejects_non_standard_multiples() -> None:
+    """Goodwill, patent, backlog, and note fields should not qualify a deal."""
+    deals = [
+        DealCandidate(
+            target="Urbint",
+            acquirer="Itron",
+            computed_multiples_available=True,
+            multiples=("goodwill_pct_of_purchase_price: 77%",),
+        ),
+        DealCandidate(
+            target="XTEND",
+            acquirer="JFB",
+            computed_multiples_available=True,
+            multiples=("EV/Backlog: 21x",),
+        ),
+        DealCandidate(
+            target="Origin AI",
+            acquirer="ADT",
+            computed_multiples_available=True,
+            multiples=("note: 200+ patent portfolio acquired",),
+        ),
+    ]
+
+    assert filter_qualified_deals(deals, min_multiples=1) == []
 
 
 def test_normalize_result_fills_defaults() -> None:

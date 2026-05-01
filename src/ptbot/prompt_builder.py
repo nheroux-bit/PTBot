@@ -57,6 +57,13 @@ def build_pass1_tasks(params: ResearchParams) -> list[AgentTask]:
         f"{horizon_instruction(params.start_date, params.end_date)}\n"
         "Return ONLY a JSON array. Each item must include: target, acquirer, date, "
         "deal_value, multiples_disclosed, computed_multiples_available, multiples, source_urls. "
+        "Set computed_multiples_available=true only when a standard valuation multiple can be "
+        "computed from transaction value plus target revenue, ARR, EBITDA, EBIT, earnings, or "
+        "a market premium. Do not treat goodwill %, identifiable intangibles %, patents, TAM, "
+        "pipeline, backlog, licensing proxies, or generic notes as qualifying multiples. "
+        "For geography, prefer target headquarters/location; if only the acquirer fits the "
+        "geography, include the deal only as a clearly labeled near-miss and do not mark it "
+        "qualified by geography. "
         "Only include acquisitions or majority-control transactions. If no deals are found, "
         "return an empty JSON array."
     )
@@ -109,7 +116,11 @@ def build_pass2_tasks(params: ResearchParams, deals: list[DealCandidate]) -> lis
         f"{params.start_date} to {params.end_date}.\n"
         f"Qualified deal manifest:\n{manifest}\n"
         "Only research deals in this manifest. If a deal appears to fail the scope, flag it "
-        "rather than silently replacing it."
+        "rather than silently replacing it. Deduplicate repeated target/acquirer variants before "
+        "analysis. Separate closed deals, pending deals, LOIs, and near-misses. Treat only "
+        "EV/Revenue, EV/ARR, EV/EBITDA, EV/EBIT, P/E, price/book, or market premiums as "
+        "standard valuation multiples; discuss goodwill, intangibles, patents, TAM, backlog, "
+        "pipeline, or licensing proxies only as qualitative context."
     )
     tasks = [
         (
@@ -158,9 +169,13 @@ Research scope:
 
 Check every included deal for:
 1. Multiples requirement: each included transaction must have at least one explicitly stated
-   or reliably computable valuation multiple.
+   or reliably computable standard valuation multiple (EV/Revenue, EV/ARR, EV/EBITDA,
+   EV/EBIT, P/E, price/book, or market premium). Goodwill %, identifiable intangibles %,
+   patents, TAM, backlog, pipeline, and licensing proxies are qualitative context, not
+   qualifying multiples.
 2. Geographic accuracy: target company must fit the requested geography unless clearly labeled
-   as a near-miss.
+   as a near-miss. If only the acquirer fits the geography, classify the deal as a near-miss
+   and exclude it from geography-specific aggregate statistics.
 3. Date accuracy: announcement or close date must fall inside the requested date window unless
    clearly labeled as a near-miss.
 4. Source attribution: every financial figure and multiple must include a source URL or filing
@@ -174,6 +189,10 @@ Produce a polished markdown report with:
 - Detailed Deal Profiles
 - Comparable Multiples Context
 - Key Takeaways for Valuation
+
+Before writing the final report, reconcile duplicate entries and use one canonical record per
+target/acquirer pair. Exclude deals without standard multiples from aggregate multiple
+statistics even if they remain useful qualitative precedents.
 
 Compiled findings:
 {compiled_deep_dive}

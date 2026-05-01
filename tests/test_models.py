@@ -33,9 +33,25 @@ def test_deal_candidate_accepts_json_arrays_as_tuples() -> None:
     assert deal.source_urls == ("https://example.com",)
 
 
-def test_deal_qualifies_with_computable_multiple_flag() -> None:
-    """A computable multiple flag should qualify a deal at min_multiples=1."""
-    deal = DealCandidate(target="A", acquirer="B", computed_multiples_available=True)
+def test_deal_qualifies_with_standard_multiple() -> None:
+    """A listed standard valuation multiple should qualify a deal."""
+    deal = DealCandidate(
+        target="A",
+        acquirer="B",
+        computed_multiples_available=True,
+        multiples=("EV/Revenue: 5.0x",),
+    )
 
     assert deal.qualifies(1)
     assert not deal.qualifies(2)
+
+
+def test_deal_qualifies_with_agent_style_standard_multiple_keys() -> None:
+    """Agent JSON keys like EV_Revenue_approx and premium_to_close should qualify."""
+    deal = DealCandidate(
+        target="A",
+        acquirer="B",
+        multiples=("EV_Revenue_approx: 4.4x", "premium_to_close: 15%"),
+    )
+
+    assert deal.qualifies(2)

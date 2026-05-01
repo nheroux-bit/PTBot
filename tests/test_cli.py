@@ -33,6 +33,29 @@ def test_config_only_outputs_valid_json(capsys) -> None:  # type: ignore[no-unty
     assert len(data["pass1_tasks"]) == 4
 
 
+def test_config_only_accepts_industry_alias(capsys) -> None:  # type: ignore[no-untyped-def]
+    """--industry should work as an alias for --sector."""
+    exit_code = main(
+        [
+            "--industry",
+            "Healthcare AI",
+            "--geography",
+            "US",
+            "--start-date",
+            "2024-01-01",
+            "--end-date",
+            "2026-05-01",
+            "--config-only",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    data = json.loads(captured.out)
+
+    assert exit_code == 0
+    assert data["params"]["sector"] == "Healthcare AI"
+
+
 def test_main_full_run_wires_output_generators(monkeypatch, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
     """Full CLI mode should call pipeline, PDF, and Excel generators."""
     calls: list[str] = []
