@@ -1,0 +1,53 @@
+version: '3'
+env:
+  PYTHONPATH: src
+
+tasks:
+  setup:
+    desc: Install PTBot and development dependencies
+    cmds:
+      - python3.11 -m venv .venv
+      - .venv/bin/python -m pip install --upgrade pip
+      - .venv/bin/python -m pip install -e ".[dev]"
+
+  fmt:
+    desc: Format source and tests
+    cmds:
+      - .venv/bin/python -m black src tests
+      - .venv/bin/python -m isort src tests
+
+  lint:
+    desc: Lint and type-check source
+    cmds:
+      - .venv/bin/python -m ruff check src tests
+      - .venv/bin/python -m mypy src
+
+  test:
+    desc: Run tests
+    cmds:
+      - .venv/bin/python -m pytest
+
+  test:coverage:
+    desc: Run tests with coverage gate
+    cmds:
+      - .venv/bin/python -m pytest --cov=ptbot --cov-report=term-missing --cov-report=html
+
+  build:
+    desc: Compile Python package
+    cmds:
+      - .venv/bin/python -m compileall src
+
+  clean:
+    desc: Clean generated artifacts
+    cmds:
+      - rm -rf .pytest_cache .mypy_cache .ruff_cache htmlcov build dist *.egg-info
+      - find . -name "__pycache__" -type d -prune -exec rm -rf {} +
+
+  check:
+    desc: Pre-commit gate (format check, lint, test, coverage, build)
+    cmds:
+      - .venv/bin/python -m black --check src tests
+      - .venv/bin/python -m isort --check-only src tests
+      - task: lint
+      - task: test:coverage
+      - task: build
