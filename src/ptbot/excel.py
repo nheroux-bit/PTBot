@@ -7,7 +7,9 @@ import re
 from pathlib import Path
 
 from openpyxl import Workbook
+from openpyxl.cell import Cell
 from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.worksheet.worksheet import Worksheet
 
 from .models import DealCandidate
 from .orchestrator import dedupe_deals, filter_qualified_deals
@@ -145,6 +147,7 @@ def load_deals(path: Path) -> list[DealCandidate]:
         raise ValueError("qualified deals JSON must be a list")
     return [DealCandidate.model_validate(item) for item in data]
 
+
 def prepare_deals(deals: list[DealCandidate]) -> tuple[list[DealCandidate], list[DealCandidate]]:
     """Deduplicate deals and split included comps from qualitative/excluded rows."""
     canonical = dedupe_deals(deals)
@@ -154,7 +157,7 @@ def prepare_deals(deals: list[DealCandidate]) -> tuple[list[DealCandidate], list
     return included, excluded
 
 
-def write_headers(sheet, headers: list[str], fill: str = HEADER_FILL) -> None:  # noqa: ANN001
+def write_headers(sheet: Worksheet, headers: list[str], fill: str = HEADER_FILL) -> None:
     """Write formatted worksheet headers."""
     for col, header in enumerate(headers, start=1):
         cell = sheet.cell(row=1, column=col, value=header)
@@ -163,13 +166,22 @@ def write_headers(sheet, headers: list[str], fill: str = HEADER_FILL) -> None:  
         cell.alignment = Alignment(wrap_text=True)
 
 
-def write_deal_row(sheet, row: int, deal: DealCandidate, included: bool) -> None:  # noqa: ANN001
+def write_deal_row(sheet: Worksheet, row: int, deal: DealCandidate, included: bool) -> None:
     """Write one deal row to a workbook sheet."""
     multiples = parse_multiple_columns(deal)
     enterprise_value = parse_deal_value_to_mm(deal.deal_value)
-    revenue = implied_metric(enterprise_value, multiples["EV/Revenue"])
-    ebitda = implied_metric(enterprise_value, multiples["EV/EBITDA"])
-    arr = implied_metric(enterprise_value, multiples["EV/ARR"])
+    ev_revenue = multiples["EV/Revenue"]
+    ev_ebitda = multiples["EV/EBITDA"]
+    ev_arr = multiples["EV/ARR"]
+    revenue = implied_metric(
+        enterprise_value, float(ev_revenue) if isinstance(ev_revenue, (int, float)) else None
+    )
+    ebitda = implied_metric(
+        enterprise_value, float(ev_ebitda) if isinstance(ev_ebitda, (int, float)) else None
+    )
+    arr = implied_metric(
+        enterprise_value, float(ev_arr) if isinstance(ev_arr, (int, float)) else None
+    )
     values = [
         deal.target,
         deal.acquirer,
@@ -207,7 +219,7 @@ def write_deal_row(sheet, row: int, deal: DealCandidate, included: bool) -> None
         link_cell(sheet.cell(row=row, column=20), first_source)
 
 
-def link_cell(cell, target: str) -> None:  # noqa: ANN001
+def link_cell(cell: Cell, target: str) -> None:
     """Format a cell as a clickable hyperlink."""
     cell.hyperlink = target
     cell.style = "Hyperlink"
@@ -216,7 +228,7 @@ def link_cell(cell, target: str) -> None:  # noqa: ANN001
 
 def implied_metric(enterprise_value: float | None, multiple: float | None) -> float | None:
     """Calculate an implied denominator from enterprise value and a multiple."""
-    if enterprise_value is None or multiple in (None, 0):
+    if enterprise_value is None or multiple is None or multiple == 0:
         return None
     return enterprise_value / multiple
 

@@ -1,0 +1,20 @@
+{
+  "vBRIEFInfo": {
+    "version": "0.6"
+  },
+  "plan": {
+    "title": "PTBot",
+    "status": "active",
+    "policy": {
+      "allowDirectCommitsToMaster": true
+    },
+    "narratives": {
+      "Overview": "PTBot is a two-pass parallel agent pipeline for precedent transaction analysis. Uses Oz local agents to discover M&A deals matching user-defined criteria (sector, geography, time window), filters to only deals with disclosed multiples, then deep-dives on qualified deals with deal-aware agents. Output is a QC-checked precedent transaction analysis in markdown, PDF, and IB-formatted Excel.",
+      "Tech Stack": "Python 3.11, fpdf2 (PDF), openpyxl (Excel), pydantic (models), oz CLI (agent orchestration). Dev: black, isort, ruff, mypy, pytest, pytest-cov.",
+      "Architecture": "Two-pass fan-out/fan-in pipeline. Pass 1: 4 source-specialized scouts (press, filings, deal databases, analyst). Compile/filter deduplicates and keeps deals with disclosed multiples. Pass 2: 3 deal-aware deep-dive agents (target terms, acquirer rationale, comparable benchmarks). QC agent validates, then PDF and Excel generators produce deliverables. Reuses run_local_agent() from attack.market orchestrator.",
+      "Deployment": "Installed as a standalone Warp skill at ~/.agents/skills/precedent-transactions/ with a CLI launcher.",
+      "Quality": "task check before every commit, >=85% coverage, secrets in secrets/ dir."
+    },
+    "items": []
+  }
+}
