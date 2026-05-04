@@ -4,7 +4,7 @@
   },
   "plan": {
     "title": "PTBot Build",
-    "status": "pending",
+    "status": "completed",
     "narratives": {
       "Scope": "Implement PTBot from SPECIFICATION.md as a Python CLI project and installable Warp skill.",
       "Acceptance": "task check passes, coverage is at least 85%, config-only mode emits valid JSON, the skill installs to ~/.agents/skills/precedent-transactions/, and attack.market is not modified."
@@ -13,19 +13,19 @@
       {
         "id": "phase-1",
         "title": "Core pipeline and CLI",
-        "status": "pending",
+        "status": "completed",
         "items": []
       },
       {
         "id": "phase-2",
         "title": "PDF and Excel outputs",
-        "status": "pending",
+        "status": "completed",
         "items": []
       },
       {
         "id": "phase-3",
         "title": "Skill packaging and verification",
-        "status": "pending",
+        "status": "completed",
         "items": []
       }
     ]

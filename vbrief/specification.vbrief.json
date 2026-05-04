@@ -4,7 +4,7 @@
   },
   "plan": {
     "title": "PTBot SPECIFICATION",
-    "status": "draft",
+    "status": "approved",
     "narratives": {
       "Overview": "PTBot is a two-pass parallel agent pipeline for precedent transaction analysis. It uses Oz local agents to discover M&A deals matching user-defined criteria (sector, geography, time window), filters to only deals with disclosed multiples, then deep-dives on qualified deals with deal-aware agents. Output is a QC-checked precedent transaction analysis in markdown, PDF, and IB-formatted Excel.",
       "Architecture": "Two-pass fan-out/fan-in pipeline built on top of attack.market's run_local_agent() helper. Pass 1 spawns 4 source-specialized scouts (press, filings, deal databases, analyst reports) in parallel. A compile/filter step deduplicates and filters to deals with disclosed multiples. Pass 2 spawns 3 deep-dive agents (target & terms, acquirer & rationale, comparable benchmarks) with the qualified deal manifest as input. A QC agent validates the compiled output, then PDF and Excel generators produce final deliverables. Installed as a standalone skill at ~/.agents/skills/precedent-transactions/ with a CLI launcher script."
@@ -13,17 +13,17 @@
       {
         "id": "phase-1",
         "title": "Phase 1: Core Pipeline",
-        "status": "pending",
+        "status": "completed",
         "items": [
           {
             "id": "1.1",
             "title": "Subphase 1.1: Two-Pass Orchestrator",
-            "status": "pending",
+            "status": "completed",
             "items": [
               {
                 "id": "t1.1.1",
                 "title": "Create two_pass_orchestrator.py with Pass 1 fan-out (4 source-specialized scouts), compile/filter step, and Pass 2 fan-out (3 deal-aware agents)",
-                "status": "pending",
+                "status": "completed",
                 "narrative": {
                   "Acceptance": "Pass 1 spawns 4 scouts in parallel via run_local_agent(). Compile step deduplicates candidates and filters to deals with multiples_disclosed=true. Pass 2 spawns 3 agents with qualified_deals.json as prompt context. All agents complete or gracefully degrade on timeout.",
                   "Traces": "FR-1, FR-2, FR-3"
@@ -32,7 +32,7 @@
               {
                 "id": "t1.1.2",
                 "title": "Implement QC agent stage with precedent-transaction-specific criteria",
-                "status": "pending",
+                "status": "completed",
                 "narrative": {
                   "Acceptance": "QC agent receives compiled Pass 2 output plus criteria from references/qc-criteria.md. Enforces: multiples present, geographic accuracy, date accuracy, source attribution, cross-section consistency. Produces qc_report.md and final_deliverable.md.",
                   "Traces": "FR-4"
@@ -43,12 +43,12 @@
           {
             "id": "1.2",
             "title": "Subphase 1.2: CLI Launcher",
-            "status": "pending",
+            "status": "completed",
             "items": [
               {
                 "id": "t1.2.1",
                 "title": "Create precedent_txns.py CLI with argparse for --sector, --geography, --start-date, --end-date, --min-multiples, --deal-size-min/max, --output-dir, --config-only, --timeout",
-                "status": "pending",
+                "status": "completed",
                 "narrative": {
                   "Acceptance": "CLI parses all arguments, builds scout and deep-dive prompts dynamically from parameters, calls two_pass_orchestrator. --config-only prints config JSON and exits without running.",
                   "Traces": "FR-5, FR-6"
@@ -57,7 +57,7 @@
               {
                 "id": "t1.2.2",
                 "title": "Implement dynamic prompt generation that scales scout prompts for wider time horizons and different geographies",
-                "status": "pending",
+                "status": "completed",
                 "narrative": {
                   "Acceptance": "Scout prompts include geography-appropriate source names (e.g., Orlando Business Journal for Orlando, Crain's for Chicago). Time horizons >6 months instruct scouts to chunk by quarter. Pass 2 prompts include full deal names from qualified_deals.json.",
                   "Traces": "FR-7"
@@ -70,17 +70,17 @@
       {
         "id": "phase-2",
         "title": "Phase 2: Output Generation",
-        "status": "pending",
+        "status": "completed",
         "items": [
           {
             "id": "2.1",
             "title": "Subphase 2.1: PDF Generation",
-            "status": "pending",
+            "status": "completed",
             "items": [
               {
                 "id": "t2.1.1",
                 "title": "Implement PDF generation from final_deliverable.md using fpdf2 with IB-style formatting (headers, footers, section breaks, clean typography)",
-                "status": "pending",
+                "status": "completed",
                 "narrative": {
                   "Acceptance": "PDF renders all sections from the deliverable template: executive summary, transaction table, deal profiles, comparable context, key takeaways. Unicode characters handled via sanitization. Page headers show report title and date.",
                   "Traces": "FR-8"
@@ -91,12 +91,12 @@
           {
             "id": "2.2",
             "title": "Subphase 2.2: Excel Comps Table",
-            "status": "pending",
+            "status": "completed",
             "items": [
               {
                 "id": "t2.2.1",
                 "title": "Create generate_comps_excel.py that produces an IB-formatted precedent comps workbook from structured deal data",
-                "status": "pending",
+                "status": "completed",
                 "narrative": {
                   "Acceptance": "Excel workbook contains: Cover sheet, Comps Table (target, acquirer, date, deal value, EV/Revenue, EV/EBITDA, EV/ARR, P/E, structure), Benchmarks sheet, Sources sheet. IB color convention applied (blue=inputs, black=formulas, green=cross-sheet). Median/mean rows use formulas, not hardcoded values.",
                   "Traces": "FR-9"
@@ -109,17 +109,17 @@
       {
         "id": "phase-3",
         "title": "Phase 3: Skill Packaging",
-        "status": "pending",
+        "status": "completed",
         "items": [
           {
             "id": "3.1",
             "title": "Subphase 3.1: Skill Definition & References",
-            "status": "pending",
+            "status": "completed",
             "items": [
               {
                 "id": "t3.1.1",
                 "title": "Write SKILL.md with trigger description, usage instructions, two-pass pipeline documentation, and CLI reference",
-                "status": "pending",
+                "status": "completed",
                 "narrative": {
                   "Acceptance": "SKILL.md frontmatter triggers on precedent transaction, M&A comps, deal comps, transaction multiples, acquisition research, and related phrases. Body documents the two-pass pipeline, CLI usage, output structure, and configuration options.",
                   "Traces": "FR-10"
@@ -128,7 +128,7 @@
               {
                 "id": "t3.1.2",
                 "title": "Write references/qc-criteria.md and references/output-template.md",
-                "status": "pending",
+                "status": "completed",
                 "narrative": {
                   "Acceptance": "qc-criteria.md contains reusable QC criteria template with parameterized geography, date range, and sector. output-template.md defines the standard deliverable structure: executive summary, summary transaction table, detailed deal profiles, comparable multiples context, key takeaways.",
                   "Traces": "FR-11"
@@ -139,12 +139,12 @@
           {
             "id": "3.2",
             "title": "Subphase 3.2: Installation & Testing",
-            "status": "pending",
+            "status": "completed",
             "items": [
               {
                 "id": "t3.2.1",
                 "title": "Install skill to ~/.agents/skills/precedent-transactions/ and verify end-to-end with a test run",
-                "status": "pending",
+                "status": "completed",
                 "narrative": {
                   "Acceptance": "Skill directory structure matches plan. CLI runs without errors in --config-only mode. Full pipeline test completes with at least graceful degradation on all agents.",
                   "Traces": "FR-12"
