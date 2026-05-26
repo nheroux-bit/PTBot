@@ -85,6 +85,20 @@ def extract_json_array(text: str) -> list[dict[str, Any]]:
     return []
 
 
+def _normalize_deal_dict(item: dict[str, Any]) -> dict[str, Any]:
+    """Coerce agent-output deal fields to their expected types before validation.
+
+    Agents occasionally return numeric values (e.g. deal_value as an int or
+    float) where the model expects a string.  Normalising here avoids touching
+    the frozen DealCandidate model.
+    """
+    result = dict(item)
+    raw_value = result.get("deal_value")
+    if raw_value is not None and not isinstance(raw_value, str):
+        result["deal_value"] = str(raw_value)
+    return result
+
+
 def candidates_from_results(results: dict[str, AgentRunResult]) -> list[DealCandidate]:
     """Parse deal candidates from all successful Pass 1 scout outputs."""
     candidates: list[DealCandidate] = []
@@ -92,7 +106,7 @@ def candidates_from_results(results: dict[str, AgentRunResult]) -> list[DealCand
         if result.state != "SUCCEEDED":
             continue
         for item in extract_json_array(result.output):
-            candidates.append(DealCandidate.model_validate(item))
+            candidates.append(DealCandidate.model_validate(_normalize_deal_dict(item)))
     return candidates
 
 
