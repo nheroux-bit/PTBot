@@ -126,3 +126,25 @@ def query_deals(conn: sqlite3.Connection, run_id: str) -> list[dict[str, Any]]:
     cursor = conn.execute("SELECT * FROM deals WHERE run_id = ?", (run_id,))
     columns = [description[0] for description in cursor.description]
     return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
+
+
+def query_run_exists(
+    conn: sqlite3.Connection,
+    sector: str,
+    geography: str,
+    start_date: str,
+    end_date: str,
+) -> bool:
+    """Return True if a run with matching sector, geography, and date range already exists."""
+    cursor = conn.execute(
+        """
+        SELECT 1 FROM runs
+        WHERE json_extract(params, '$.sector')     = ?
+          AND json_extract(params, '$.geography')  = ?
+          AND json_extract(params, '$.start_date') = ?
+          AND json_extract(params, '$.end_date')   = ?
+        LIMIT 1
+        """,
+        (sector, geography, start_date, end_date),
+    )
+    return cursor.fetchone() is not None

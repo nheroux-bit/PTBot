@@ -253,6 +253,54 @@ def test_query_deals_filters_by_run_id(tmp_path: Path) -> None:
     assert rows_2[0]["target"] == "Zeta Diagnostics"
 
 
+# ---------------------------------------------------------------------------
+# query_run_exists
+# ---------------------------------------------------------------------------
+
+
+def test_query_run_exists_returns_true_when_match(tmp_path: Path) -> None:
+    """query_run_exists should return True when a matching run is present."""
+    conn = open_db(tmp_path / "test.db")
+    run_id = new_run_id()
+    insert_run(conn, run_id, _PARAMS)
+
+    from ptbot.db import query_run_exists
+
+    result = query_run_exists(conn, "HealthTech", "Boston, MA", "2024-01-01", "2024-12-31")
+    conn.close()
+
+    assert result is True
+
+
+def test_query_run_exists_returns_false_when_empty_db(tmp_path: Path) -> None:
+    """query_run_exists should return False when the database has no runs."""
+    conn = open_db(tmp_path / "test.db")
+
+    from ptbot.db import query_run_exists
+
+    result = query_run_exists(conn, "HealthTech", "Boston, MA", "2024-01-01", "2024-12-31")
+    conn.close()
+
+    assert result is False
+
+
+def test_query_run_exists_returns_false_for_different_params(tmp_path: Path) -> None:
+    """query_run_exists should not match when any param differs."""
+    conn = open_db(tmp_path / "test.db")
+    run_id = new_run_id()
+    insert_run(conn, run_id, _PARAMS)  # HealthTech / Boston, MA / 2024-01-01 / 2024-12-31
+
+    from ptbot.db import query_run_exists
+
+    # Different sector
+    assert query_run_exists(conn, "FinTech", "Boston, MA", "2024-01-01", "2024-12-31") is False
+    # Different geography
+    assert query_run_exists(conn, "HealthTech", "New York", "2024-01-01", "2024-12-31") is False
+    # Different year
+    assert query_run_exists(conn, "HealthTech", "Boston, MA", "2023-01-01", "2023-12-31") is False
+    conn.close()
+
+
 def test_multiple_runs_do_not_bleed(tmp_path: Path) -> None:
     """Data from one run should not appear in another run's results."""
     conn = open_db(tmp_path / "test.db")
