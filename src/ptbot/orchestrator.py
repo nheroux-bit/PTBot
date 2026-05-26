@@ -127,13 +127,29 @@ def _normalize_deal_dict(item: dict[str, Any]) -> dict[str, Any]:
 
 
 def candidates_from_results(results: dict[str, AgentRunResult]) -> list[DealCandidate]:
-    """Parse deal candidates from all successful Pass 1 scout outputs."""
+    """Parse deal candidates from all successful Pass 1 scout outputs.
+
+    Silently drops:
+    - Dicts missing required ``target`` / ``acquirer`` keys (metadata objects
+      that agents occasionally include alongside deal records).
+    - Dicts that fail pydantic validation after normalisation (logged to stderr
+      so they are visible but do not abort the pipeline).
+    """
+    import sys
+
+    from pydantic import ValidationError
+
     candidates: list[DealCandidate] = []
     for result in results.values():
         if result.state != "SUCCEEDED":
             continue
         for item in extract_json_array(result.output):
-            candidates.append(DealCandidate.model_validate(_normalize_deal_dict(item)))
+            if "target" not in item or "acquirer" not in item:
+                continue  # skip metadata / header objects
+            try:
+                candidates.append(DealCandidate.model_validate(_normalize_deal_dict(item)))
+            except ValidationError as exc:
+                print(f"[ptbot] skipping malformed deal record: {exc}", file=sys.stderr)
     return candidates
 
 
