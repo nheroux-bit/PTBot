@@ -27,6 +27,11 @@ dev = [
   "pytest-mock>=3.14",
   "ruff>=0.5",
 ]
+app = [
+  "streamlit>=1.35",
+  "pandas>=2.0",
+  "plotly>=5.0",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
