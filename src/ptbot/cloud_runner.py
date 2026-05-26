@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import time
 from collections.abc import Callable
@@ -11,9 +12,17 @@ from typing import Any
 TERMINAL_STATES = frozenset({"SUCCEEDED", "FAILED", "CANCELLED", "ERRORED"})
 Runner = Callable[[str, int], dict[str, Any]]
 
+# oz-preview agent run-cloud prints human-readable text, not JSON.
+# Pattern: "Spawned ambient agent with run ID: <uuid>"
+_RUN_ID_RE = re.compile(r"run ID:\s+([0-9a-f-]{36})", re.IGNORECASE)
+
 
 def _spawn_cloud_agent(prompt: str, environment_id: str) -> str:
-    """Spawn an Oz cloud agent and return its run ID."""
+    """Spawn an Oz cloud agent and return its run ID.
+
+    ``oz-preview agent run-cloud`` prints human-readable text regardless of
+    ``--output-format``; we extract the run ID via regex.
+    """
     result = subprocess.run(
         [
             "oz-preview",
@@ -23,8 +32,6 @@ def _spawn_cloud_agent(prompt: str, environment_id: str) -> str:
             prompt,
             "--environment",
             environment_id,
-            "--output-format",
-            "json",
             "--no-snapshot",
         ],
         capture_output=True,
@@ -33,15 +40,10 @@ def _spawn_cloud_agent(prompt: str, environment_id: str) -> str:
     )
     if result.returncode != 0:
         raise RuntimeError(f"spawn failed (exit {result.returncode}): {result.stderr.strip()}")
-    try:
-        data = json.loads(result.stdout)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"spawn returned non-JSON: {result.stdout[:200]}") from exc
-    # Accept both run_id and task_id as identifiers (API uses task_id in some versions)
-    run_id = data.get("run_id") or data.get("task_id") or data.get("id")
-    if not run_id:
-        raise RuntimeError(f"no run_id in spawn response: {result.stdout[:200]}")
-    return str(run_id)
+    match = _RUN_ID_RE.search(result.stdout)
+    if not match:
+        raise RuntimeError(f"no run ID found in spawn output: {result.stdout[:300]!r}")
+    return match.group(1)
 
 
 def _get_run_state(run_id: str) -> str:

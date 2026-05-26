@@ -1,0 +1,28 @@
+# PTBot Sweep Configuration — New Sectors
+# 5 sectors × 11 years (2016-2026) = 55 pipeline runs
+# Each pipeline dispatches 8 cloud research agents:
+#   Pass 1: 4 source-specialized scouts (press, filings, deal databases, analyst)
+#   Pass 2: 3 deal-aware deep-dive agents (target/terms, acquirer/rationale, benchmarks)
+#   QC:     1 quality-check and synthesis agent
+
+[sweep]
+geography     = "United States"
+start_year    = 2016
+end_year      = 2026          # inclusive; 11 years total
+min_multiples = 1
+output_dir    = "./sweep-output"
+
+[[sectors]]
+name = "Cybersecurity"
+
+[[sectors]]
+name = "EdTech"
+
+[[sectors]]
+name = "InsurTech"
+
+[[sectors]]
+name = "HR Tech"
+
+[[sectors]]
+name = "PropTech"
