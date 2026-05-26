@@ -1,4 +1,4 @@
-<!-- deft:managed-section v3 sha=e2427ec9604b refreshed=2026-05-26T13:24:36Z session=ba401affaf78 -->
+<!-- deft:managed-section v3 sha=e097a49bd002 refreshed=2026-05-26T22:51:51Z session=24cbfdd49850 -->
 # Deft — AI Development Framework
 
 Deft is installed in .deft/core/. Full guidelines: .deft/core/main.md
@@ -107,6 +107,15 @@ Override paths the user may invoke:
 - `DEFT_ALLOW_DEFAULT_BRANCH_COMMIT=1` -- emergency env-var bypass
 
 ⊗ Begin a session that will commit/push without surfacing the policy state when allowDirectCommitsToMaster=true.
+
+## PowerShell
+
+**Grok Build Windows capture limitations (#1353):** When running under the Grok Build runtime on Windows + pwsh 7+, `run_terminal_command` leaks internal wrapper text (Get-Content and redirection fragments) whenever the command string contains `|`, `2>&1`, `| cat`, `>`, or similar metacharacters. Non-piped commands execute cleanly.
+
+- ! Never emit commands containing pipes or redirections through the agent shell tool on this platform. For anything requiring a pipe, use one of: Python one-liners with `pathlib` / `subprocess.run(capture_output=True)` (preferred -- bypasses the wrapper at the OS level), run the operation in the user's native terminal and paste the result back, or isolate the work in a dedicated worktree and mark the step as "user shell required".
+- ! This rule applies to the Grok Build runtime (pwsh 7+); Warp + Claude (PTY-based) is not affected.
+
+Cross-reference: `.deft/core/docs/analysis/2026-05-26-issue-1353-grok-windows-capture-opensrc-audit.md`. Refs #1353.
 
 ## Development Process
 
