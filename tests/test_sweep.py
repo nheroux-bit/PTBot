@@ -19,6 +19,8 @@ from ptbot.sweep import (
     slug,
 )
 
+S3_URI = "s3://my-bucket/ptbot/ptbot.db"
+
 # ---------------------------------------------------------------------------
 # slug
 # ---------------------------------------------------------------------------
@@ -212,6 +214,161 @@ def test_run_sweep_calls_pipeline_for_new_combination(tmp_path: Path) -> None:
 
     # 1 market × (1 complete year + 1 partial) = 2 calls
     assert mock_pipeline.call_count == 2
+
+
+def test_run_sweep_uses_cloud_runner_when_cloud_flag_set(tmp_path: Path) -> None:
+    """run_sweep(cloud=True) should inject a cloud runner into run_pipeline."""
+    db_path = tmp_path / "test.db"
+    config = _minimal_config(str(db_path), years_back=1)
+
+    captured_runners: list = []
+
+    def spy_pipeline(*args, runner=None, **kwargs):  # type: ignore[no-untyped-def]
+        captured_runners.append(runner)
+        return MagicMock()
+
+    with (
+        patch("ptbot.sweep.run_pipeline", side_effect=spy_pipeline),
+        patch("ptbot.sweep.datetime") as mock_dt,
+    ):
+        mock_dt.now.return_value.date.return_value = date(2026, 5, 26)
+        run_sweep(config, dry_run=False, db_path_override=db_path, cloud=True)
+
+    assert len(captured_runners) > 0
+    for runner in captured_runners:
+        assert runner is not None, "expected a cloud runner to be injected"
+        assert callable(runner)
+
+
+def test_run_sweep_cloud_environment_passed_to_runner(tmp_path: Path) -> None:
+    """cloud_environment kwarg should be forwarded to make_cloud_runner."""
+    db_path = tmp_path / "test.db"
+    config = _minimal_config(str(db_path), years_back=1)
+
+    with (
+        patch("ptbot.sweep.make_cloud_runner") as mock_make_runner,
+        patch("ptbot.sweep.run_pipeline", return_value=MagicMock()),
+        patch("ptbot.sweep.datetime") as mock_dt,
+    ):
+        mock_dt.now.return_value.date.return_value = date(2026, 5, 26)
+        run_sweep(
+            config,
+            dry_run=False,
+            db_path_override=db_path,
+            cloud=True,
+            cloud_environment="env-xyz",
+        )
+
+    mock_make_runner.assert_called_once_with(environment="env-xyz")
+
+
+def test_run_sweep_s3_pull_called_before_skip_detection(tmp_path: Path) -> None:
+    """pull_db should be called before the DB connection is opened."""
+    db_path = tmp_path / "test.db"
+    config = SweepConfig(
+        sweep=SweepSettings(
+            years_back=1,
+            db_path=str(db_path),
+            output_base_dir="/tmp/ptbot-sweep-test",
+            min_multiples=1,
+            timeout=1,
+            db_sync_s3_uri=S3_URI,
+        ),
+        markets=[MarketTarget(sector="HealthTech", geography="US")],
+    )
+
+    call_order: list[str] = []
+
+    def spy_pull(uri: str, path: object) -> bool:
+        call_order.append("pull")
+        return False
+
+    def spy_pipeline(*args, **kwargs):  # type: ignore[no-untyped-def]
+        call_order.append("pipeline")
+        return MagicMock()
+
+    with (
+        patch("ptbot.sweep._db_sync.pull_db", side_effect=spy_pull),
+        patch("ptbot.sweep._db_sync.push_db"),
+        patch("ptbot.sweep.run_pipeline", side_effect=spy_pipeline),
+        patch("ptbot.sweep.datetime") as mock_dt,
+    ):
+        mock_dt.now.return_value.date.return_value = date(2026, 5, 26)
+        run_sweep(config, dry_run=False, db_path_override=db_path)
+
+    assert call_order[0] == "pull", "pull should happen before pipeline runs"
+
+
+def test_run_sweep_s3_push_called_after_execution(tmp_path: Path) -> None:
+    """push_db should be called after all pipeline runs complete."""
+    db_path = tmp_path / "test.db"
+    config = SweepConfig(
+        sweep=SweepSettings(
+            years_back=1,
+            db_path=str(db_path),
+            output_base_dir="/tmp/ptbot-sweep-test",
+            min_multiples=1,
+            timeout=1,
+            db_sync_s3_uri=S3_URI,
+        ),
+        markets=[MarketTarget(sector="HealthTech", geography="US")],
+    )
+
+    with (
+        patch("ptbot.sweep._db_sync.pull_db", return_value=False),
+        patch("ptbot.sweep._db_sync.push_db") as mock_push,
+        patch("ptbot.sweep.run_pipeline", return_value=MagicMock()),
+        patch("ptbot.sweep.datetime") as mock_dt,
+    ):
+        mock_dt.now.return_value.date.return_value = date(2026, 5, 26)
+        run_sweep(config, dry_run=False, db_path_override=db_path)
+
+    mock_push.assert_called_once_with(db_path, S3_URI)
+
+
+def test_run_sweep_s3_sync_not_called_without_uri(tmp_path: Path) -> None:
+    """pull_db and push_db should not be called when db_sync_s3_uri is unset."""
+    db_path = tmp_path / "test.db"
+    config = _minimal_config(str(db_path), years_back=1)
+
+    with (
+        patch("ptbot.sweep._db_sync.pull_db") as mock_pull,
+        patch("ptbot.sweep._db_sync.push_db") as mock_push,
+        patch("ptbot.sweep.run_pipeline", return_value=MagicMock()),
+        patch("ptbot.sweep.datetime") as mock_dt,
+    ):
+        mock_dt.now.return_value.date.return_value = date(2026, 5, 26)
+        run_sweep(config, dry_run=False, db_path_override=db_path)
+
+    mock_pull.assert_not_called()
+    mock_push.assert_not_called()
+
+
+def test_run_sweep_s3_sync_not_called_in_dry_run(tmp_path: Path) -> None:
+    """pull_db should not be called when dry_run=True."""
+    db_path = tmp_path / "test.db"
+    config = SweepConfig(
+        sweep=SweepSettings(
+            years_back=1,
+            db_path=str(db_path),
+            output_base_dir="/tmp/ptbot-sweep-test",
+            min_multiples=1,
+            timeout=1,
+            db_sync_s3_uri=S3_URI,
+        ),
+        markets=[MarketTarget(sector="HealthTech", geography="US")],
+    )
+
+    with (
+        patch("ptbot.sweep._db_sync.pull_db") as mock_pull,
+        patch("ptbot.sweep._db_sync.push_db") as mock_push,
+        patch("ptbot.sweep.datetime") as mock_dt,
+    ):
+        mock_dt.now.return_value.date.return_value = date(2026, 5, 26)
+        run_sweep(config, dry_run=True, db_path_override=db_path)
+
+    mock_pull.assert_not_called()
+    mock_push.assert_not_called()
 
 
 def test_run_sweep_skips_existing_combination(tmp_path: Path) -> None:

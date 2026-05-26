@@ -13,6 +13,7 @@ from typing import Any, cast
 from . import db as _db
 from .models import AgentRunResult, AgentTask, DealCandidate, PipelinePaths, ResearchParams
 from .prompt_builder import build_pass1_tasks, build_pass2_tasks, build_qc_prompt
+from .runners import run_local_agent as _run_local_agent
 
 Runner = Callable[[str, int], dict[str, Any]]
 
@@ -205,6 +206,20 @@ def write_json(path: Path, payload: object) -> None:
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
+def _load_default_runner() -> Runner:
+    """Return the best available local runner.
+
+    Tries to load the attack.market runner first (for backward compatibility
+    with existing local setups), then falls back to the self-contained
+    ``runners.run_local_agent`` implementation so PTBot works in cloud
+    environments where the attack.market skill is not installed.
+    """
+    try:
+        return load_attack_market_runner()
+    except (FileNotFoundError, ImportError):
+        return _run_local_agent
+
+
 def run_pipeline(
     params: ResearchParams,
     output_dir: Path,
@@ -214,7 +229,7 @@ def run_pipeline(
     db_path: Path | None = None,
 ) -> PipelinePaths:
     """Run the full two-pass pipeline and write markdown/JSON outputs."""
-    active_runner = runner or load_attack_market_runner()
+    active_runner = runner or _load_default_runner()
     supporting_dir = output_dir / "supporting"
     metadata_dir = output_dir / "metadata"
     supporting_dir.mkdir(parents=True, exist_ok=True)

@@ -37,6 +37,17 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print planned runs without invoking any agents",
     )
+    parser.add_argument(
+        "--cloud",
+        action="store_true",
+        help="Use oz agent run-cloud for all pipeline tasks instead of local agents",
+    )
+    parser.add_argument(
+        "--environment",
+        default=None,
+        metavar="ENV_ID",
+        help="Oz cloud environment ID for --cloud runs (overrides config cloud_environment)",
+    )
     return parser
 
 
@@ -54,7 +65,13 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     db_path_override = Path(args.db_path).expanduser() if args.db_path else None
 
-    run_sweep(config, dry_run=args.dry_run, db_path_override=db_path_override)
+    run_sweep(
+        config,
+        dry_run=args.dry_run,
+        db_path_override=db_path_override,
+        cloud=args.cloud,
+        cloud_environment=args.environment,
+    )
     return 0
 
 

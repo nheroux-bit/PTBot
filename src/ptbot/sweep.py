@@ -12,8 +12,10 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field
 
 from . import db as _db
+from . import db_sync as _db_sync
 from .models import ResearchParams
 from .orchestrator import Runner, run_pipeline
+from .runners import make_cloud_runner
 
 # ---------------------------------------------------------------------------
 # Config models
@@ -40,6 +42,10 @@ class SweepSettings(BaseModel):
     min_multiples: int = Field(default=1, ge=1)
     timeout: int = Field(default=900, ge=1)
     max_workers: int = Field(default=1, ge=1)
+    # Cloud execution
+    cloud_environment: str | None = Field(default=None)
+    # S3-backed DB persistence for cloud deployments (requires AWS CLI)
+    db_sync_s3_uri: str | None = Field(default=None)
 
 
 class SweepConfig(BaseModel):
@@ -148,6 +154,8 @@ def run_sweep(
     runner: Runner | None = None,
     dry_run: bool = False,
     db_path_override: Path | None = None,
+    cloud: bool = False,
+    cloud_environment: str | None = None,
 ) -> None:
     """Run the sweep across all (market × window) combinations.
 
@@ -155,12 +163,31 @@ def run_sweep(
     in the config, pending combinations run in parallel using a thread pool —
     each pipeline is I/O-bound (waiting on Oz agents) so threading scales well.
     When *dry_run* is True, planned runs are printed but no agents are invoked.
+
+    When *cloud* is True, ``oz agent run-cloud`` is used for every pipeline
+    task instead of the default local runner.  The optional *cloud_environment*
+    argument (or ``config.sweep.cloud_environment``) selects the Oz environment.
+
+    When ``config.sweep.db_sync_s3_uri`` is set, the database is downloaded
+    from S3 before skip detection and uploaded back to S3 after execution so
+    that ephemeral cloud environments retain deal history across runs.
     """
     db_path = db_path_override or Path(config.sweep.db_path).expanduser()
     output_base = Path(config.sweep.output_base_dir).expanduser()
     windows = generate_annual_windows(config.sweep.years_back)
     max_workers = config.sweep.max_workers
     total = len(config.markets) * len(windows)
+
+    # Resolve the runner: explicit injection > cloud flag > default local.
+    if runner is None and cloud:
+        env = cloud_environment or config.sweep.cloud_environment
+        runner = make_cloud_runner(environment=env)
+    # else: run_pipeline() resolves the default runner lazily when runner is None.
+
+    # Pull DB from S3 before skip detection so existing runs are visible.
+    s3_uri = config.sweep.db_sync_s3_uri
+    if s3_uri and not dry_run:
+        _db_sync.pull_db(s3_uri, db_path)
 
     # --- Phase 1: skip detection (single-threaded, one DB connection) ---
     conn = _db.open_db(db_path)
@@ -224,3 +251,7 @@ def run_sweep(
     if failed:
         summary += f", {failed} failed (see stderr)"
     print(summary)
+
+    # Push DB to S3 after execution so future runs inherit the new rows.
+    if s3_uri:
+        _db_sync.push_db(db_path, s3_uri)
