@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, cast
 
+from . import db as _db
 from .models import AgentRunResult, AgentTask, DealCandidate, PipelinePaths, ResearchParams
 from .prompt_builder import build_pass1_tasks, build_pass2_tasks, build_qc_prompt
 
@@ -153,6 +154,7 @@ def run_pipeline(
     *,
     runner: Runner | None = None,
     timeout: int = 900,
+    db_path: Path | None = None,
 ) -> PipelinePaths:
     """Run the full two-pass pipeline and write markdown/JSON outputs."""
     active_runner = runner or load_attack_market_runner()
@@ -167,7 +169,16 @@ def run_pipeline(
     (supporting_dir / "pass1_compiled_deals.md").write_text(pass1_compiled, encoding="utf-8")
 
     candidates = candidates_from_results(pass1_results)
-    qualified = filter_qualified_deals(dedupe_deals(candidates), params.min_multiples)
+    deduped = dedupe_deals(candidates)
+    qualified = filter_qualified_deals(deduped, params.min_multiples)
+
+    if db_path is not None:
+        conn = _db.open_db(db_path)
+        run_id = _db.new_run_id()
+        _db.insert_run(conn, run_id, params)
+        _db.insert_deals(conn, run_id, deduped, qualified_keys={d.key() for d in qualified})
+        conn.close()
+
     qualified_payload = [deal.model_dump(mode="json") for deal in qualified]
     qualified_path = supporting_dir / "qualified_deals.json"
     write_json(qualified_path, qualified_payload)

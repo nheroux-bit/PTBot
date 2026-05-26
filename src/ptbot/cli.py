@@ -33,6 +33,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", default="./precedent-txn-output", help="Output directory")
     parser.add_argument("--timeout", type=int, default=900, help="Per-agent timeout in seconds")
     parser.add_argument(
+        "--db-path",
+        default=None,
+        help="SQLite database path (e.g. ~/.ptbot/ptbot.db). Omit to skip persistence.",
+    )
+    parser.add_argument(
         "--config-only", action="store_true", help="Print generated config and exit"
     )
     return parser
@@ -62,7 +67,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     output_dir = Path(args.output_dir)
-    paths = run_pipeline(params, output_dir, timeout=args.timeout)
+    db_path = Path(args.db_path) if args.db_path else None
+    paths = run_pipeline(params, output_dir, timeout=args.timeout, db_path=db_path)
     markdown_to_pdf(
         paths.final_markdown, paths.final_pdf, f"{params.sector} Precedent Transactions"
     )
