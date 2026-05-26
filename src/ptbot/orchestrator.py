@@ -88,14 +88,41 @@ def extract_json_array(text: str) -> list[dict[str, Any]]:
 def _normalize_deal_dict(item: dict[str, Any]) -> dict[str, Any]:
     """Coerce agent-output deal fields to their expected types before validation.
 
-    Agents occasionally return numeric values (e.g. deal_value as an int or
-    float) where the model expects a string.  Normalising here avoids touching
-    the frozen DealCandidate model.
+    Agents return inconsistent types for several fields.  This normaliser
+    fixes the most common mismatches without touching the frozen DealCandidate
+    model:
+
+    - deal_value / date: numeric or non-string → str
+    - multiples_disclosed / computed_multiples_available: any non-bool.
+      When a list is received in a bool field the agent has accidentally put
+      multiples data there; the list is merged into the ``multiples`` field
+      and the bool is set to True.
     """
     result = dict(item)
-    raw_value = result.get("deal_value")
-    if raw_value is not None and not isinstance(raw_value, str):
-        result["deal_value"] = str(raw_value)
+
+    # String fields that agents sometimes return as numbers
+    for str_field in ("deal_value", "date"):
+        val = result.get(str_field)
+        if val is not None and not isinstance(val, str):
+            result[str_field] = str(val)
+
+    # Bool fields that agents sometimes return as lists of multiples strings
+    for bool_field in ("multiples_disclosed", "computed_multiples_available"):
+        val = result.get(bool_field)
+        if val is None or isinstance(val, bool):
+            continue
+        if isinstance(val, list):
+            # Merge the misplaced multiples into the multiples field
+            existing = result.get("multiples") or []
+            if isinstance(existing, (list, tuple)):
+                merged = list(existing) + [str(v) for v in val if v]
+            else:
+                merged = [str(v) for v in val if v]
+            result["multiples"] = merged
+            result[bool_field] = True
+        else:
+            result[bool_field] = bool(val)
+
     return result
 
 
