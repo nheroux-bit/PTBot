@@ -44,6 +44,7 @@ def open_db(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA busy_timeout=10000")  # wait up to 10 s on writer contention
     conn.executescript(_SCHEMA)
     conn.commit()
     return conn

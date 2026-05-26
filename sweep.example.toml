@@ -28,6 +28,12 @@ min_multiples = 1
 # Per-agent timeout in seconds.
 timeout = 900
 
+# Number of pipeline runs to execute simultaneously.
+# Each run spawns ~8 Oz agents, so max_workers=3 means up to 24 concurrent
+# agents. Check your Oz account's agent concurrency limit before increasing.
+# Default is 1 (sequential). Values of 3–4 are a good starting point.
+max_workers = 3
+
 # --- Market targets ---
 # Add one [[markets]] block per (sector, geography) combination you want to sweep.
 # The sweep runs all combinations sequentially, oldest year first.
