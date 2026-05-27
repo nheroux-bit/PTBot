@@ -188,3 +188,23 @@ task check
 - `src/ptbot/sweep_cli.py`: `ptbot-sweep` command-line interface
 - `sweep.example.toml`: annotated sweep config template
 - `tests/`: unit and integration tests
+
+## SummitIntel Integration (quality-signals-001)
+
+PTBot now emits structured `DealQualitySignals` (HIGH/MEDIUM/LOW + breakdown + citations + flags + methodology_tags) on every persisted deal and in `supporting/quality_signals.json` + `metadata/run_metadata.json`.
+
+**Mapping to SummitIntel DealConfidence** (direct 1:1):
+- `effective_confidence` (human override wins) → `DealConfidence`
+- `confidence_score` (0-1) → source quality / weight
+- `citations[]` + `flags[]` → source tracking / audit trail
+- `breakdown.*` (source_attribution, multiples_quality, ...) → rationale fields
+- `methodology_tags[]` → `source_system` / methodology classification
+- `human_*` fields → review provenance (who / when / why)
+
+**Ingestion notes**:
+- Prefer the JSON artifacts over parsing prose QC for automated pipelines.
+- The `dedup_key` + `deal_id` provide stable identifiers across runs.
+- Human overrides (via dashboard or `ptbot --feedback-deal-id ...`) are stored in the `quality_signals` JSON column and surfaced as the effective value.
+- Fallback: when no structured block was parsed from QC, defaults to MEDIUM / 0.65 with empty breakdown (agents still produce the prose report).
+
+This makes every PTBot deal first-class, defensible data suitable for cross-source analysis inside SummitIntel alongside vendor feeds.

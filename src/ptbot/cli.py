@@ -6,6 +6,7 @@ import argparse
 import json
 import sys
 from collections.abc import Sequence
+from datetime import UTC, datetime
 from pathlib import Path
 
 from .excel import generate_comps_excel
@@ -59,6 +60,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--config-only", action="store_true", help="Print generated config and exit"
     )
+    # Human feedback (quality-signals-001) — lightweight CLI path alongside dashboard
+    parser.add_argument(
+        "--feedback-deal-id", default=None, help="Deal ID to attach human override to"
+    )
+    parser.add_argument("--feedback-confidence", choices=["HIGH", "MEDIUM", "LOW"], default=None)
+    parser.add_argument("--feedback-notes", default=None, help="Human rationale for override")
+    parser.add_argument("--feedback-reviewer", default="cli-user")
     return parser
 
 
@@ -224,6 +232,34 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(raw_argv)
     params = params_from_args(args)
+
+    if args.feedback_deal_id:
+        # Lightweight human feedback path (quality-signals-001)
+        if not args.db_path:
+            print(
+                "ERROR: --db-path is required when using --feedback-deal-id",
+                file=__import__("sys").stderr,
+            )
+            return 2
+        import sqlite3
+
+        payload: dict[str, object] = {}
+        if args.feedback_confidence:
+            payload["human_confidence_override"] = args.feedback_confidence
+        if args.feedback_notes:
+            payload["human_notes"] = args.feedback_notes
+        payload["reviewer"] = args.feedback_reviewer or "cli-user"
+        payload["reviewed_at"] = datetime.now(UTC).isoformat()
+
+        conn = sqlite3.connect(Path(args.db_path).expanduser())
+        conn.execute(
+            "UPDATE deals SET quality_signals = ? WHERE deal_id = ?",
+            (json.dumps(payload), args.feedback_deal_id),
+        )
+        conn.commit()
+        conn.close()
+        print(f"Feedback recorded for deal {args.feedback_deal_id}")
+        return 0
 
     if args.config_only:
         print(json.dumps(build_config(params), indent=2))

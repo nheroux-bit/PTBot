@@ -76,6 +76,8 @@ def load_deals(db_path_str: str) -> pd.DataFrame:
             d.multiples,
             d.source_urls,
             d.qualified,
+            d.quality_signals,
+            d.dedup_key,
             json_extract(r.params, '$.sector')     AS sector,
             json_extract(r.params, '$.geography')  AS geography,
             substr(json_extract(r.params, '$.start_date'), 1, 4) AS year
@@ -90,6 +92,24 @@ def load_deals(db_path_str: str) -> pd.DataFrame:
     df["source_list"] = df["source_urls"].apply(lambda x: json.loads(x) if x else [])
     df["year"] = df["year"].astype(str)
     df["qualified"] = df["qualified"].astype(bool)
+
+    # Parse quality signals (quality-signals-001)
+    def _parse_quality(qs: str | None) -> dict[str, Any]:
+        if not qs:
+            return {}
+        try:
+            data: Any = json.loads(qs)
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+    df["quality"] = df["quality_signals"].apply(_parse_quality)
+    df["confidence"] = df["quality"].apply(
+        lambda q: q.get("human_confidence_override") or q.get("overall_confidence") or "—"
+    )
+    df["has_human_override"] = df["quality"].apply(
+        lambda q: bool(q.get("human_confidence_override"))
+    )
     return df
 
 
@@ -326,6 +346,86 @@ def page_deal_browser(df: pd.DataFrame) -> None:
             st.markdown("**Sources:**")
             for url in row["source_list"]:
                 st.markdown(f"- [{url}]({url})")
+
+        # --- Structured Quality Signals + Human Feedback (quality-signals-001) ---
+        st.markdown("### 🛡️ Quality & Confidence Signals")
+        q = row.get("quality") or {}
+        if q:
+            eff = q.get("human_confidence_override") or q.get("overall_confidence", "—")
+            score = q.get("confidence_score", "—")
+            c1, c2 = st.columns(2)
+            c1.metric("Effective Confidence", str(eff).upper())
+            c2.metric(
+                "Agent Score", f"{float(score):.2f}" if isinstance(score, (int, float)) else score
+            )
+
+            bd = q.get("breakdown", {})
+            if bd:
+                st.caption("Breakdown (QC criteria)")
+                for k, v in bd.items():
+                    if v:
+                        st.markdown(f"- **{k.replace('_', ' ').title()}**: {v}")
+
+            if q.get("citations"):
+                st.markdown("**Quality Citations:** " + "; ".join(q.get("citations", [])[:3]))
+            flags = q.get("flags", []) or []
+            if flags:
+                st.markdown("**Flags:** " + ", ".join(flags))
+            tags = q.get("methodology_tags", []) or []
+            if tags:
+                st.markdown("**Methodology:** " + ", ".join(tags))
+            if q.get("human_notes"):
+                st.info(f"Human note: {q['human_notes']}")
+        else:
+            st.caption("No structured quality signals yet (pre-001 data or QC fallback).")
+
+        # Human feedback form (persists override back to SQLite)
+        with st.expander("✍️ Record Human Feedback / Override", expanded=False):
+            fb_col1, fb_col2 = st.columns([1, 2])
+            with fb_col1:
+                new_conf = st.selectbox(
+                    "Override Confidence",
+                    ["(keep agent)", "HIGH", "MEDIUM", "LOW"],
+                    index=0,
+                    key=f"conf_{row['deal_id']}",
+                )
+            with fb_col2:
+                new_notes = st.text_area(
+                    "Notes (why the override?)",
+                    value=q.get("human_notes", ""),
+                    height=80,
+                    key=f"notes_{row['deal_id']}",
+                    placeholder="e.g. Verified vs 8-K; higher source quality.",
+                )
+            reviewer_name = st.text_input(
+                "Reviewer", value="dashboard-user", key=f"rev_{row['deal_id']}"
+            )
+            if st.button("Save Human Override", key=f"save_{row['deal_id']}"):
+                try:
+                    override = None if new_conf == "(keep agent)" else new_conf
+                    payload = dict(q)  # copy
+                    if override:
+                        payload["human_confidence_override"] = override
+                    if new_notes.strip():
+                        payload["human_notes"] = new_notes.strip()
+                    if reviewer_name.strip():
+                        payload["reviewer"] = reviewer_name.strip()
+                    # ISO timestamp
+                    from datetime import UTC, datetime
+
+                    payload["reviewed_at"] = datetime.now(UTC).isoformat()
+
+                    conn = sqlite3.connect(str(db_path))
+                    conn.execute(
+                        "UPDATE deals SET quality_signals = ? WHERE deal_id = ?",
+                        (json.dumps(payload), row["deal_id"]),
+                    )
+                    conn.commit()
+                    conn.close()
+                    st.success("Feedback saved. Reload page or re-run query to see update.")
+                    st.cache_data.clear()
+                except Exception as exc:  # noqa: BLE001
+                    st.error(f"Failed to save feedback: {exc}")
 
 
 # ---------------------------------------------------------------------------

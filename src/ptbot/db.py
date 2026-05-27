@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import sqlite3
 import uuid
@@ -29,7 +30,9 @@ CREATE TABLE IF NOT EXISTS deals (
     computed_multiples_available INTEGER NOT NULL DEFAULT 0,
     multiples                    TEXT NOT NULL DEFAULT '[]',
     source_urls                  TEXT NOT NULL DEFAULT '[]',
-    qualified                    INTEGER NOT NULL DEFAULT 0
+    qualified                    INTEGER NOT NULL DEFAULT 0,
+    quality_signals              TEXT,          -- JSON DealQualitySignals (quality-signals-001)
+    dedup_key                    TEXT           -- normalized key for reliable matching/updates
 );
 """
 
@@ -65,6 +68,13 @@ def open_db(db_path: Path) -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA busy_timeout=10000")  # wait up to 10 s on writer contention
     conn.executescript(_SCHEMA)
+    # Additive migrations for quality-signals-001 (idempotent)
+    for col, type_decl in [
+        ("quality_signals", "TEXT"),
+        ("dedup_key", "TEXT"),
+    ]:
+        with contextlib.suppress(sqlite3.OperationalError):
+            conn.execute(f"ALTER TABLE deals ADD COLUMN {col} {type_decl}")
     conn.commit()
     _ensure_cost_columns(conn)  # cost-accounting-001: idempotent ALTERs for pre-existing DBs
     return conn
@@ -116,14 +126,18 @@ def insert_deals(
     candidates: list[DealCandidate],
     *,
     qualified_keys: set[str],
+    quality_by_key: dict[str, str] | None = None,
 ) -> None:
     """Insert deal candidates for a run.
 
     Each deal is marked as qualified if its normalised key appears in
     *qualified_keys*.  Bulk-inserted with a single ``executemany`` call.
+    quality_by_key: optional {dedup_key: json-string-of-DealQualitySignals} populated
+    post-QC (see orchestrator after structured extraction).
     """
     if not candidates:
         return
+    quality_by_key = quality_by_key or {}
     rows = [
         (
             str(uuid.uuid4()),
@@ -137,6 +151,8 @@ def insert_deals(
             json.dumps(list(deal.multiples)),
             json.dumps(list(deal.source_urls)),
             int(deal.key() in qualified_keys),
+            quality_by_key.get(deal.key()),  # may be None
+            deal.key(),
         )
         for deal in candidates
     ]
@@ -145,8 +161,8 @@ def insert_deals(
         INSERT INTO deals (
             deal_id, run_id, target, acquirer, date, deal_value,
             multiples_disclosed, computed_multiples_available,
-            multiples, source_urls, qualified
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            multiples, source_urls, qualified, quality_signals, dedup_key
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         rows,
     )
@@ -268,3 +284,33 @@ def get_industry_cost_summary(
     data["remaining_budget_usd"] = max(0.0, 50.0 - data["total_cost_usd"])
     data["over_budget"] = data["total_cost_usd"] > 50.0
     return data
+
+
+# --- Quality signals helpers (quality-signals-001) ---
+
+
+def update_deal_quality_signals(
+            """
+            UPDATE deals
+            SET quality_signals = ?
+            WHERE run_id = ? AND dedup_key = ?
+            """,
+            (qjson, run_id, key),
+        )
+        updated += cur.rowcount
+    conn.commit()
+    return updated
+
+
+def query_deal_quality(conn: sqlite3.Connection, deal_id: str) -> dict[str, Any] | None:
+    """Return parsed quality_signals for a specific deal_id, or None."""
+    cursor = conn.execute("SELECT quality_signals FROM deals WHERE deal_id = ? LIMIT 1", (deal_id,))
+    row = cursor.fetchone()
+    if not row or not row[0]:
+        return None
+    try:
+        data: Any = json.loads(row[0])
+        return data if isinstance(data, dict) else None
+    except json.JSONDecodeError:
+        return None
+

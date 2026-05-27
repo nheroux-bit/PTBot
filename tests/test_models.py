@@ -4,7 +4,13 @@ from __future__ import annotations
 
 import pytest
 
-from ptbot.models import DealCandidate, ResearchParams
+from ptbot.models import (
+    ConfidenceLevel,
+    DealCandidate,
+    DealQualitySignals,
+    QualityBreakdown,
+    ResearchParams,
+)
 
 
 def test_research_params_reject_invalid_date() -> None:
@@ -55,3 +61,41 @@ def test_deal_qualifies_with_agent_style_standard_multiple_keys() -> None:
     )
 
     assert deal.qualifies(2)
+
+
+# --- quality-signals-001 tests ---
+
+
+def test_confidence_level_enum() -> None:
+    assert ConfidenceLevel.HIGH.value == "HIGH"
+    assert ConfidenceLevel("MEDIUM") == ConfidenceLevel.MEDIUM
+
+
+def test_quality_breakdown_defaults() -> None:
+    b = QualityBreakdown()
+    assert b.source_attribution == ""
+    assert "multiples_quality" in QualityBreakdown.model_fields
+
+
+def test_deal_quality_signals_defaults_and_effective() -> None:
+    q = DealQualitySignals()
+    assert q.overall_confidence == ConfidenceLevel.MEDIUM
+    assert q.effective_confidence == ConfidenceLevel.MEDIUM
+    q.human_confidence_override = ConfidenceLevel.HIGH
+    assert q.effective_confidence == ConfidenceLevel.HIGH
+    assert q.to_summitintel_confidence() == "HIGH"
+
+
+def test_deal_quality_signals_roundtrip() -> None:
+    q = DealQualitySignals(
+        overall_confidence=ConfidenceLevel.LOW,
+        confidence_score=0.3,
+        breakdown=QualityBreakdown(source_attribution="weak press only"),
+        citations=("https://sec.gov/...",),
+        flags=("near_miss_geography",),
+        human_notes="Manually reviewed 8-K",
+    )
+    # Use model_validate_json for proper enum/tuple coercion from serialized form
+    q2 = DealQualitySignals.model_validate_json(q.model_dump_json())
+    assert q2.effective_confidence == ConfidenceLevel.LOW
+    assert "near_miss_geography" in q2.flags
