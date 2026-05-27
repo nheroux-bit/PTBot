@@ -149,6 +149,37 @@ For example: `./precedent-txn-output/vertical-saas/united-states/2023/`
 - `--db-path`: override the `db_path` from config
 - `--dry-run`: print planned runs without executing any agents
 
+## Querying the database
+
+Once the database has been populated (via `--db-path` or `ptbot-sweep`), explore it from the terminal:
+
+```bash
+# List recent pipeline runs with deal counts
+.venv/bin/ptbot query runs --db-path ~/.ptbot/ptbot.db
+
+# Search deals by sector and show only qualified ones
+.venv/bin/ptbot query deals --sector "FinTech" --qualified-only
+
+# Export all deals matching a filter to CSV
+.venv/bin/ptbot query export --sector "FinTech" --output fintech-deals.csv
+
+# Export to JSON for scripting
+.venv/bin/ptbot query export --format json
+
+# JSON output for any subcommand
+.venv/bin/ptbot query runs --format json
+.venv/bin/ptbot query deals --geography "United States" --format json
+```
+
+Flags available on all `query` subcommands:
+- `--db-path`: path to the SQLite database (default: `~/.ptbot/ptbot.db`)
+- `--format table|json` (or `csv|json` for `export`)
+
+Additional flags:
+- `query runs`: `--limit N`, `--since YYYY-MM-DD`
+- `query deals`: `--sector`, `--geography`, `--since`, `--qualified-only`, `--limit N`
+- `query export`: `--sector`, `--geography`, `--qualified-only`, `--limit N`, `--output FILE`
+
 ## Outputs
 
 A full run writes:

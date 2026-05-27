@@ -579,6 +579,61 @@ def get_top_deals(
     return candidates[:n]
 
 
+# ---------------------------------------------------------------------------
+# Query CLI helpers (ptbot query runs / deals / export)
+# ---------------------------------------------------------------------------
+
+
+def list_runs_with_stats(
+    conn: sqlite3.Connection,
+    *,
+    since: str | None = None,
+    limit: int | None = 20,
+) -> list[dict[str, Any]]:
+    """Return runs with per-run deal and qualified-deal counts.
+
+    Each row includes the JSON-extracted sector/geography/date range plus
+    total_deals and qualified_deals counts via a LEFT JOIN on deals.
+    Ordered newest-first.
+    """
+    conditions = []
+    params: list[Any] = []
+    if since:
+        conditions.append("r.timestamp >= ?")
+        params.append(since)
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+    limit_clause = f"LIMIT {int(limit)}" if limit is not None else ""
+    sql = f"""
+        SELECT
+            r.run_id,
+            json_extract(r.params, '$.sector')     AS sector,
+            json_extract(r.params, '$.geography')  AS geography,
+            json_extract(r.params, '$.start_date') AS start_date,
+            json_extract(r.params, '$.end_date')   AS end_date,
+            r.timestamp,
+            COUNT(d.deal_id)                       AS total_deals,
+            SUM(CASE WHEN d.qualified = 1 THEN 1 ELSE 0 END) AS qualified_deals
+        FROM runs r
+        LEFT JOIN deals d ON d.run_id = r.run_id
+        {where}
+        GROUP BY r.run_id
+        ORDER BY r.timestamp DESC
+        {limit_clause}
+    """
+    cursor = conn.execute(sql, params)
+    columns = [d[0] for d in cursor.description]
+    return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
+
+
+def get_run_details(conn: sqlite3.Connection, run_id: str) -> dict[str, Any] | None:
+    """Return a single run record with deal stats, or None if not found."""
+    rows = list_runs_with_stats(conn, limit=None)
+    for r in rows:
+        if r["run_id"] == run_id or r["run_id"].startswith(run_id):
+            return r
+    return None
+
+
 def get_similar_deals(
     conn: sqlite3.Connection,
     *,
