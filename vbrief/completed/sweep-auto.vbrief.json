@@ -5,7 +5,7 @@
   },
   "plan": {
     "title": "ptbot sweep:auto — TOML-free cloud sweep orchestrator",
-    "status": "running",
+    "status": "completed",
     "summary": "Add a `ptbot sweep:auto` subcommand that takes sectors, geography, and years as CLI flags (no TOML file needed), dispatches parallel cloud agents to sweep all missing market×year combinations, and reports how many deals were added to the database.",
     "motivation": "The existing `ptbot-sweep --cloud` requires authoring a TOML config file. `sweep:auto` removes that friction: declare what you want inline, fire cloud agents in parallel, and let the DB build itself. Primary use case: an operator or Oz agent can say `ptbot sweep:auto --sectors 'FinTech,HealthTech' --geography 'United States' --years 5` and walk away.",
     "deliverables": [
@@ -25,6 +25,6 @@
       "Must work with max_workers > 1 (parallelism is the point)",
       "--sectors accepts comma-separated list; each becomes a MarketTarget with the shared --geography"
     ],
-    "updated": "2026-05-27T19:44:18Z"
+    "updated": "2026-05-27T21:59:33Z"
   }
 }

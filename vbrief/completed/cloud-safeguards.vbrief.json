@@ -5,7 +5,7 @@
   },
   "plan": {
     "title": "Cloud agent safeguards: kill-all, WIP cap, dispatch watchdog",
-    "status": "running",
+    "status": "completed",
     "summary": "Prevent rogue cloud agent firestorms and make recovery fast. Three complementary safeguards: a nuclear `ptbot cloud kill-all` command, a configurable WIP cap that blocks new dispatches when too many agents are already running, and a lightweight timeout watchdog that auto-kills overdue runs.",
     "motivation": "A 2026-05-27 firedrill showed cloud agents going rogue and becoming unkillable: `oz agent kill` failed on all 5 probed CLI surfaces, sub-agents spawned inside runs were unregistered, and the sweep had no dispatch ceiling. Recovery required manual intervention in the Oz dashboard. The three safeguards here close the three failure modes independently so no single point can produce an unrecoverable situation.",
     "deliverables": [
@@ -24,6 +24,6 @@
       "Watchdog thread is daemon=True so it never blocks process exit if the sweep finishes or is Ctrl-C'd",
       "Frozen models — do not change DealCandidate or ResearchParams"
     ],
-    "updated": "2026-05-27T19:57:42Z"
+    "updated": "2026-05-27T21:59:33Z"
   }
 }
