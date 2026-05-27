@@ -156,7 +156,7 @@ def run_sweep(
     db_path_override: Path | None = None,
     cloud: bool = False,
     cloud_environment: str | None = None,
-) -> None:
+) -> int:
     """Run the sweep across all (market × window) combinations.
 
     Combinations already in the database are skipped.  When *max_workers* > 1
@@ -230,7 +230,7 @@ def run_sweep(
             )
             print(f"[sweep] would run  {label}")
         print(f"[sweep] dry-run complete — {len(pending)} would run, {skipped} skipped")
-        return
+        return 0
 
     # --- Phase 2: parallel execution ---
     completed = failed = 0
@@ -262,3 +262,5 @@ def run_sweep(
     # Push DB to S3 after execution so future runs inherit the new rows.
     if s3_uri:
         _db_sync.push_db(db_path, s3_uri)
+
+    return failed

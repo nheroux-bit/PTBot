@@ -315,6 +315,17 @@ def _truncate(s: str, n: int) -> str:
     return s if len(s) <= n else s[: n - 1] + "…"
 
 
+def _positive_int(value: str) -> int:
+    """Argparse type that rejects non-positive integers."""
+    try:
+        n = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid int value: {value!r}") from None
+    if n < 1:
+        raise argparse.ArgumentTypeError(f"value must be >= 1, got {n}")
+    return n
+
+
 def _handle_sweep_auto_command(argv: Sequence[str]) -> int:
     """Handle ptbot sweep:auto — TOML-free parallel cloud sweep orchestrator.
 
@@ -343,7 +354,7 @@ def _handle_sweep_auto_command(argv: Sequence[str]) -> int:
     )
     parser.add_argument(
         "--years",
-        type=int,
+        type=_positive_int,
         default=5,
         help="Number of calendar years to look back (default: 5)",
     )
@@ -360,13 +371,13 @@ def _handle_sweep_auto_command(argv: Sequence[str]) -> int:
     )
     parser.add_argument(
         "--max-workers",
-        type=int,
+        type=_positive_int,
         default=4,
         help="Maximum parallel agent dispatches (default: 4)",
     )
     parser.add_argument(
         "--timeout",
-        type=int,
+        type=_positive_int,
         default=900,
         help="Per-pipeline agent timeout in seconds (default: 900)",
     )
@@ -412,14 +423,14 @@ def _handle_sweep_auto_command(argv: Sequence[str]) -> int:
             "Pass --environment <env_id> to dispatch cloud agents."
         )
 
-    run_sweep(
+    failures = run_sweep(
         config,
         dry_run=args.dry_run,
         db_path_override=db_path,
         cloud=use_cloud,
         cloud_environment=args.environment,
     )
-    return 0
+    return 1 if failures else 0
 
 
 def build_parser() -> argparse.ArgumentParser:
