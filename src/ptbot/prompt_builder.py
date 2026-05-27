@@ -194,6 +194,47 @@ Before writing the final report, reconcile duplicate entries and use one canonic
 target/acquirer pair. Exclude deals without standard multiples from aggregate multiple
 statistics even if they remain useful qualitative precedents.
 
+After the polished markdown report, ALSO emit a single structured JSON block (do not escape)
+for queryable quality signals. Use this exact shape (fill with your assessment):
+
+```json
+{{
+  "quality_assessment": {{
+    "overall": {{
+      "confidence": "HIGH|MEDIUM|LOW",
+      "score": 0.0,
+      "breakdown": {{
+        "source_attribution": "short rationale",
+        "multiples_quality": "short rationale",
+        "geographic_fit": "short rationale",
+        "date_accuracy": "short rationale",
+        "consistency": "short rationale",
+        "benchmark_context": "short rationale"
+      }},
+      "citations": ["url or filing", "..."],
+      "flags": ["near_miss_geography", "..."],
+      "methodology_tags": ["press_only", "filings_verified", "..."]
+    }},
+    "deals": [
+      {{
+        "target": "Exact target name from manifest",
+        "acquirer": "Exact acquirer name from manifest",
+        "confidence": "HIGH|MEDIUM|LOW",
+        "score": 0.0,
+        "breakdown": {{ "source_attribution": "...", "multiples_quality": "..." }},
+        "citations": ["..."],
+        "flags": ["..."],
+        "methodology_tags": ["..."]
+      }}
+    ]
+  }}
+}}
+```
+
+Use the deduplicated target/acquirer pairs from the compiled findings for the deals array.
+If a deal has weak sources or borderline multiples, mark confidence MEDIUM or LOW with clear flags.
+This structured block enables defensibility and SummitIntel integration.
+
 Compiled findings:
 {compiled_deep_dive}
 """

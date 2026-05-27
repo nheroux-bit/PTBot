@@ -10,8 +10,10 @@ from ptbot.db import (
     insert_run,
     new_run_id,
     open_db,
+    query_deal_quality,
     query_deals,
     query_runs,
+    update_deal_quality_signals,
 )
 from ptbot.models import DealCandidate, ResearchParams
 
@@ -314,4 +316,37 @@ def test_multiple_runs_do_not_bleed(tmp_path: Path) -> None:
     assert len(query_deals(conn, run_id_1)) == 2
     assert len(query_deals(conn, run_id_2)) == 1
     assert len(query_runs(conn)) == 2
+    conn.close()
+
+
+# --- quality-signals-001 persistence tests ---
+
+
+def test_deals_table_has_quality_columns(tmp_path: Path) -> None:
+    """New columns from quality-signals-001 must exist (additive migration)."""
+    conn = open_db(tmp_path / "test.db")
+    cursor = conn.execute("PRAGMA table_info(deals)")
+    cols = {row[1] for row in cursor.fetchall()}
+    assert "quality_signals" in cols
+    assert "dedup_key" in cols
+    conn.close()
+
+
+def test_insert_and_update_quality_signals(tmp_path: Path) -> None:
+    """Insert deals, then update quality via key, then query it back."""
+    conn = open_db(tmp_path / "test.db")
+    run_id = new_run_id()
+    insert_run(conn, run_id, _PARAMS)
+    insert_deals(conn, run_id, [_DEAL_A], qualified_keys={_DEAL_A.key()})
+
+    qjson = json.dumps({"overall_confidence": "HIGH", "confidence_score": 0.92})
+    n = update_deal_quality_signals(conn, run_id, {_DEAL_A.key(): qjson})
+    assert n == 1
+
+    deals = query_deals(conn, run_id)
+    assert deals[0]["quality_signals"] == qjson
+    assert deals[0]["dedup_key"] == _DEAL_A.key()
+
+    q = query_deal_quality(conn, deals[0]["deal_id"])
+    assert q["overall_confidence"] == "HIGH"
     conn.close()

@@ -64,7 +64,11 @@ addopts = "--cov=ptbot --cov-report=term-missing --cov-report=html"
 
 [tool.coverage.run]
 source = ["src/ptbot"]
-omit = ["*/tests/*", "*/app.py", "*/sweep_cli.py"]
+omit = [
+    "*/tests/*",
+    "src/ptbot/app.py",      # Streamlit dashboard (integration / manual UI)
+    "src/ptbot/sweep_cli.py", # Sweep entrypoint (integration)
+]
 
 [tool.coverage.report]
 fail_under = 85

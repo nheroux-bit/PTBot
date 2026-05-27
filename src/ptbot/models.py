@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -133,6 +134,92 @@ class DealCandidate(BaseModel):
     def qualifies(self, min_multiples: int) -> bool:
         """Return whether this deal satisfies the disclosed/computable multiples filter."""
         return self.standard_multiple_count() >= min_multiples
+
+
+# ---------------------------------------------------------------------------
+# Structured Quality & Confidence Signals (quality-signals-001)
+# ---------------------------------------------------------------------------
+
+
+class ConfidenceLevel(StrEnum):
+    """Canonical confidence levels aligned with SummitIntel DealConfidence."""
+
+    HIGH = "HIGH"
+    MEDIUM = "MEDIUM"
+    LOW = "LOW"
+
+
+class QualityBreakdown(BaseModel):
+    """Per-criterion quality assessment for defensibility and auditability."""
+
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    source_attribution: str = Field(default="", description="Strength of source URLs/filings")
+    multiples_quality: str = Field(
+        default="", description="Clarity and standard-ness of disclosed multiples"
+    )
+    geographic_fit: str = Field(
+        default="", description="Target HQ fit to requested geography (incl. near-miss notes)"
+    )
+    date_accuracy: str = Field(
+        default="", description="Announcement/close date alignment to window"
+    )
+    consistency: str = Field(
+        default="", description="Cross-section consistency (target/acquirer/value/multiples)"
+    )
+    benchmark_context: str = Field(
+        default="", description="Presence and relevance of sector M&A benchmarks"
+    )
+
+
+class DealQualitySignals(BaseModel):
+    """Structured, queryable quality and confidence signals for a deal (or overall QC).
+
+    Enables data defensibility, human feedback loops, and clean SummitIntel ingestion.
+    Human overrides take precedence for effective_confidence.
+    """
+
+    model_config = ConfigDict(strict=True, extra="forbid", frozen=False)
+
+    overall_confidence: ConfidenceLevel = Field(
+        default=ConfidenceLevel.MEDIUM,
+        description="Agent-assessed confidence for this deal or report",
+    )
+    confidence_score: float = Field(
+        default=0.65, ge=0.0, le=1.0, description="Normalized 0-1 score backing the level"
+    )
+    breakdown: QualityBreakdown = Field(
+        default_factory=QualityBreakdown,
+        description="Criterion-by-criterion rationale (maps to QC criteria)",
+    )
+    citations: tuple[str, ...] = Field(
+        default_factory=tuple, description="Source URLs or filing refs backing the assessment"
+    )
+    flags: tuple[str, ...] = Field(
+        default_factory=tuple,
+        description="Structured tags (near_miss_geography, low_source_diversity, ...)",
+    )
+    methodology_tags: tuple[str, ...] = Field(
+        default_factory=tuple,
+        description="Provenance tags e.g. press_only, filings_verified, analyst_sourced",
+    )
+
+    # Human feedback layer (mutable for overrides)
+    human_confidence_override: ConfidenceLevel | None = Field(
+        default=None, description="Operator override (takes precedence)"
+    )
+    human_notes: str | None = Field(default=None, description="Free-text rationale for override")
+    reviewer: str | None = Field(default=None, description="Operator or system reviewer id")
+    reviewed_at: str | None = Field(default=None, description="ISO timestamp of last human touch")
+
+    @property
+    def effective_confidence(self) -> ConfidenceLevel:
+        """Return the human override if present, else the agent overall_confidence."""
+        return self.human_confidence_override or self.overall_confidence
+
+    def to_summitintel_confidence(self) -> str:
+        """Map to SummitIntel's expected HIGH/MEDIUM/LOW (already aligned)."""
+        return self.effective_confidence.value
 
 
 class AgentRunResult(BaseModel):

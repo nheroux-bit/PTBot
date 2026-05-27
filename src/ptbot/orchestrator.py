@@ -17,6 +17,7 @@ from .models import (
     AgentTask,
     CostBreakdown,
     DealCandidate,
+    DealQualitySignals,
     PipelinePaths,
     ResearchParams,
     TokenUsage,
@@ -104,6 +105,47 @@ def extract_json_array(text: str) -> list[dict[str, Any]]:
         if isinstance(parsed, list):
             return [item for item in parsed if isinstance(item, dict)]
     return []
+
+
+def extract_quality_assessment(text: str) -> dict[str, Any] | None:
+    """Extract structured quality JSON block from QC (or other) agent output.
+
+    Looks for ```json quality_assessment ... ``` or bare top-level object containing the key.
+    Returns the 'quality_assessment' dict or None on failure. Robust to prose wrapping.
+    """
+    stripped = text.strip()
+    if not stripped:
+        return None
+    # Try direct parse first (agent emitted only JSON)
+    try:
+        parsed = json.loads(stripped)
+        if isinstance(parsed, dict) and "quality_assessment" in parsed:
+            return parsed["quality_assessment"]  # type: ignore[no-any-return]
+    except (json.JSONDecodeError, TypeError):
+        pass
+    # Fenced block
+    fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", stripped, re.DOTALL)
+    if fenced:
+        try:
+            parsed = json.loads(fenced.group(1))
+            if isinstance(parsed, dict) and "quality_assessment" in parsed:
+                return parsed["quality_assessment"]  # type: ignore[no-any-return]
+        except (json.JSONDecodeError, TypeError):
+            pass
+    # Last-resort: find the quality_assessment object by scanning for key
+    if "quality_assessment" in stripped:
+        start = stripped.find("{")
+        # naive but effective for our controlled prompt shape
+        for end in range(len(stripped) - 1, start, -1):
+            if stripped[end] == "}":
+                candidate = stripped[start : end + 1]
+                try:
+                    parsed = json.loads(candidate)
+                    if isinstance(parsed, dict) and "quality_assessment" in parsed:
+                        return parsed["quality_assessment"]  # type: ignore[no-any-return]
+                except (json.JSONDecodeError, TypeError):
+                    continue
+    return None
 
 
 def _normalize_deal_dict(item: dict[str, Any]) -> dict[str, Any]:
@@ -302,6 +344,9 @@ def run_pipeline(
     deduped = dedupe_deals(candidates)
     qualified = filter_qualified_deals(deduped, params.min_multiples)
 
+    # DB bookkeeping happens early (discovery persisted even if later stages fail).
+    # Quality signals (post-QC) are patched in via update after extraction below.
+    run_id: str | None = None
     if db_path is not None:
         conn = _db.open_db(db_path)
         run_id = _db.new_run_id()
@@ -344,18 +389,80 @@ def run_pipeline(
     if db_path is not None and run_id is not None:
         try:
             conn = _db.open_db(db_path)
-            _db.update_run_cost(conn, run_id, run_cost)  # added by cost vBRIEF (see db.py)
+            _db.update_run_cost(conn, run_id, run_cost)
             conn.close()
-        except Exception as exc:  # noqa: BLE001 - cost persistence must never break a run
-            print(f"[ptbot] warning: failed to persist run cost: {exc}", file=sys.stderr)
+        except Exception as exc:
+            print(f"[ptbot] WARNING: failed to persist run cost: {exc}", file=sys.stderr)
 
-    # Enrich metadata with cost (per-run + per-agent already in the pass1/pass2 dicts via runner)
+    # --- Structured quality signals extraction (quality-signals-001) ---
+    quality_raw = extract_quality_assessment(qc_result.output) or {}
+    overall_raw = quality_raw.get("overall", {})
+    per_deal_raw = quality_raw.get("deals", [])
+
+    try:
+        overall_quality = DealQualitySignals.model_validate(
+            {
+                "overall_confidence": overall_raw.get("confidence", "MEDIUM"),
+                "confidence_score": overall_raw.get("score", 0.65),
+                "breakdown": overall_raw.get("breakdown", {}),
+                "citations": tuple(overall_raw.get("citations", [])),
+                "flags": tuple(overall_raw.get("flags", [])),
+                "methodology_tags": tuple(overall_raw.get("methodology_tags", [])),
+            }
+        )
+    except Exception:
+        overall_quality = DealQualitySignals()
+
+    quality_by_key: dict[str, DealQualitySignals] = {}
+    for d in per_deal_raw:
+        if not isinstance(d, dict):
+            continue
+        t = str(d.get("target", "")).strip()
+        a = str(d.get("acquirer", "")).strip()
+        if not t or not a:
+            continue
+        norm = f"{DealCandidate._normalize_party(t)}|{DealCandidate._normalize_party(a)}"
+        key = "".join(ch for ch in norm if ch.isalnum() or ch == "|")
+        try:
+            q = DealQualitySignals.model_validate(
+                {
+                    "overall_confidence": d.get("confidence", "MEDIUM"),
+                    "confidence_score": d.get("score", 0.65),
+                    "breakdown": d.get("breakdown", {}),
+                    "citations": tuple(d.get("citations", [])),
+                    "flags": tuple(d.get("flags", [])),
+                    "methodology_tags": tuple(d.get("methodology_tags", [])),
+                }
+            )
+            quality_by_key[key] = q
+        except Exception:
+            continue
+
+    # Persist quality artifact + DB update
+    quality_artifact = {
+        "overall": overall_quality.model_dump(mode="json"),
+        "per_deal_count": len(quality_by_key),
+        "by_key": {k: v.model_dump(mode="json") for k, v in quality_by_key.items()},
+    }
+    write_json(supporting_dir / "quality_signals.json", quality_artifact)
+
+    if db_path is not None and run_id is not None and quality_by_key:
+        qjson_map = {k: json.dumps(v.model_dump(mode="json")) for k, v in quality_by_key.items()}
+        try:
+            conn = _db.open_db(db_path)
+            _db.update_deal_quality_signals(conn, run_id, qjson_map)
+            conn.close()
+        except Exception as exc:
+            print(f"[ptbot] WARNING: failed to persist quality signals: {exc}", file=sys.stderr)
+
     metadata = {
         "params": params.model_dump(mode="json"),
         "pass1": {key: value.model_dump(mode="json") for key, value in pass1_results.items()},
         "pass2": {key: value.model_dump(mode="json") for key, value in pass2_results.items()},
         "qc": qc_result.model_dump(mode="json"),
         "cost": run_cost.model_dump(mode="json"),
+        "quality": overall_quality.model_dump(mode="json"),
+        "quality_by_deal_key": {k: v.model_dump(mode="json") for k, v in quality_by_key.items()},
     }
     write_json(metadata_dir / "run_metadata.json", metadata)
 

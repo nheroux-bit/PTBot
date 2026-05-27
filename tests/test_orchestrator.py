@@ -13,6 +13,7 @@ from ptbot.orchestrator import (
     compile_agent_outputs,
     dedupe_deals,
     extract_json_array,
+    extract_quality_assessment,
     filter_qualified_deals,
     load_attack_market_runner,
     normalize_result,
@@ -197,3 +198,18 @@ def test_run_pipeline_with_fake_runner(tmp_path: Path) -> None:
     assert paths.final_markdown.read_text(encoding="utf-8").startswith("# Final")
     assert paths.qualified_deals.exists()
     assert len(calls) == 8
+
+
+def test_extract_quality_assessment_from_mixed_output() -> None:
+    """Quality JSON block after prose should be extracted cleanly (quality-signals-001)."""
+    mixed = """# QC Report
+Some prose here with HIGH confidence language.
+
+```json
+{"quality_assessment": {"overall": {"confidence": "HIGH", "score": 0.9}, "deals": []}}
+```
+"""
+    qa = extract_quality_assessment(mixed)
+    assert qa is not None
+    assert qa["overall"]["confidence"] == "HIGH"
+    assert qa["overall"]["score"] == 0.9
