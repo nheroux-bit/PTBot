@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import re
 import sys
+import threading
+import time
 import tomllib
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
@@ -46,6 +48,8 @@ class SweepSettings(BaseModel):
     cloud_environment: str | None = Field(default=None)
     # S3-backed DB persistence for cloud deployments (requires AWS CLI)
     db_sync_s3_uri: str | None = Field(default=None)
+    # Safeguard: maximum number of active cloud runs allowed before dispatch is blocked
+    max_active_cloud_runs: int = Field(default=10, ge=1)
 
 
 class SweepConfig(BaseModel):
@@ -148,6 +152,59 @@ def _run_one(
         return False
 
 
+def _watchdog_thread(
+    db_path: Path,
+    timeout_secs: int,
+    stop_event: threading.Event,
+    poll_interval: float = 60.0,
+) -> None:
+    """Background daemon: kill cloud runs that have been running too long.
+
+    Polls every *poll_interval* seconds (default 60; pass a small value in
+    tests).  Any run in the registry whose ``dispatched_at`` is older than
+    ``timeout_secs * 1.5`` without reaching a terminal state is force-killed
+    via ``kill_cloud_run()`` and marked revoked in the registry.  Closes the
+    2026-05-27 firedrill failure mode where agents ran past their configured
+    timeout and became unresponsive.
+    """
+    from .runners import kill_cloud_run
+
+    deadline_factor = 1.5
+    while not stop_event.wait(poll_interval):  # wakes immediately on stop
+        try:
+            conn = _db.open_db(db_path)
+            try:
+                active = _db.list_cloud_runs(conn, active_only=True)
+                now_ts = time.time()
+                for run in active:
+                    try:
+                        dispatched = datetime.fromisoformat(
+                            run["dispatched_at"].replace("Z", "+00:00")
+                        ).timestamp()
+                    except Exception:
+                        continue
+                    elapsed = now_ts - dispatched
+                    if elapsed > timeout_secs * deadline_factor:
+                        rid = run["oz_run_id"]
+                        print(
+                            f"[sweep:watchdog] overdue ({elapsed:.0f}s > "
+                            f"{timeout_secs * deadline_factor:.0f}s) — killing {rid[:12]}...",
+                            file=sys.stderr,
+                        )
+                        ok, kill_msg = kill_cloud_run(rid, run.get("run_url", ""))
+                        if not ok:
+                            print(
+                                f"[sweep:watchdog] oz kill failed for {rid[:12]}...: "
+                                f"{kill_msg.splitlines()[0][:80]}",
+                                file=sys.stderr,
+                            )
+                        _db.mark_cloud_run_revoked(conn, rid)
+            finally:
+                conn.close()
+        except Exception as exc:  # noqa: BLE001 — watchdog must never crash the sweep
+            print(f"[sweep:watchdog] error: {exc}", file=sys.stderr)
+
+
 def run_sweep(
     config: SweepConfig,
     *,
@@ -156,6 +213,7 @@ def run_sweep(
     db_path_override: Path | None = None,
     cloud: bool = False,
     cloud_environment: str | None = None,
+    max_active_cloud_runs: int | None = None,
 ) -> int:
     """Run the sweep across all (market × window) combinations.
 
@@ -168,6 +226,17 @@ def run_sweep(
     task instead of the default local runner.  The optional *cloud_environment*
     argument (or ``config.sweep.cloud_environment``) selects the Oz environment.
 
+    **WIP cap (safeguard #1):** When *cloud* is True, the registry is checked
+    before any dispatch.  If the number of currently active cloud runs meets or
+    exceeds *max_active_cloud_runs* (or ``config.sweep.max_active_cloud_runs``
+    when that argument is None), the sweep aborts immediately.  This prevents
+    a new sweep from stacking on top of a runaway prior run.
+
+    **Timeout watchdog (safeguard #2):** When *cloud* is True (and not
+    *dry_run*), a background daemon thread polls the registry every 60 s and
+    force-kills any run that has exceeded ``config.sweep.timeout * 1.5``
+    without reaching a terminal state.
+
     When ``config.sweep.db_sync_s3_uri`` is set, the database is downloaded
     from S3 before skip detection and uploaded back to S3 after execution so
     that ephemeral cloud environments retain deal history across runs.
@@ -177,6 +246,11 @@ def run_sweep(
     windows = generate_annual_windows(config.sweep.years_back)
     max_workers = config.sweep.max_workers
     total = len(config.markets) * len(windows)
+    wip_cap = (
+        max_active_cloud_runs
+        if max_active_cloud_runs is not None
+        else config.sweep.max_active_cloud_runs
+    )
 
     # Resolve the runner: explicit injection > cloud flag > default local.
     if runner is None and cloud:
@@ -195,6 +269,23 @@ def run_sweep(
     s3_uri = config.sweep.db_sync_s3_uri
     if s3_uri and not dry_run:
         _db_sync.pull_db(s3_uri, db_path)
+
+    # --- WIP cap check (cloud only, before any dispatch) ---
+    if cloud and not dry_run:
+        cap_conn = _db.open_db(db_path)
+        try:
+            active_runs = _db.list_cloud_runs(cap_conn, active_only=True)
+            active_count = len(active_runs)
+            if active_count >= wip_cap:
+                ids_preview = ", ".join(r["oz_run_id"][:12] + "..." for r in active_runs[:5])
+                extra = f" (+{active_count - 5} more)" if active_count > 5 else ""
+                raise RuntimeError(
+                    f"[sweep] WIP cap reached: {active_count} active cloud run(s) ≥ "
+                    f"max_active={wip_cap}. Active: {ids_preview}{extra}\n"
+                    "Use `ptbot cloud kill-all` to clear them or raise --max-active."
+                )
+        finally:
+            cap_conn.close()
 
     # --- Phase 1: skip detection (single-threaded, one DB connection) ---
     conn = _db.open_db(db_path)
@@ -232,27 +323,44 @@ def run_sweep(
         print(f"[sweep] dry-run complete — {len(pending)} would run, {skipped} skipped")
         return 0
 
-    # --- Phase 2: parallel execution ---
+    # --- Phase 2: parallel execution + watchdog ---
+    stop_watchdog = threading.Event()
+    if cloud:  # launch watchdog daemon for all cloud sweeps
+        wdog = threading.Thread(
+            target=_watchdog_thread,
+            args=(db_path, config.sweep.timeout, stop_watchdog),
+            daemon=True,
+            name="sweep-watchdog",
+        )
+        wdog.start()
+    else:
+        wdog = None
+
     completed = failed = 0
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = {
-            pool.submit(
-                _run_one,
-                market,
-                start_date,
-                end_date,
-                config=config,
-                db_path=db_path,
-                output_base=output_base,
-                runner=runner,
-            ): (market, start_date, end_date)
-            for market, start_date, end_date in pending
-        }
-        for future in as_completed(futures):
-            if future.result():
-                completed += 1
-            else:
-                failed += 1
+    try:
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = {
+                pool.submit(
+                    _run_one,
+                    market,
+                    start_date,
+                    end_date,
+                    config=config,
+                    db_path=db_path,
+                    output_base=output_base,
+                    runner=runner,
+                ): (market, start_date, end_date)
+                for market, start_date, end_date in pending
+            }
+            for future in as_completed(futures):
+                if future.result():
+                    completed += 1
+                else:
+                    failed += 1
+    finally:
+        stop_watchdog.set()  # always stop the watchdog, even on error / Ctrl-C
+        if wdog is not None:
+            wdog.join(timeout=5)
 
     summary = f"[sweep] complete — {completed} run(s), {skipped} skipped"
     if failed:

@@ -317,13 +317,56 @@ def get_cloud_run(conn: sqlite3.Connection, oz_run_id: str) -> dict[str, Any] | 
 
 
 def mark_cloud_run_revoked(conn: sqlite3.Connection, oz_run_id: str) -> None:
-    """Mark a cloud run revoked (called after successful or best-effort kill)."""
+    """Mark a cloud run revoked (called after successful or best-effort kill).
+
+    Only updates runs still in a non-terminal state ('dispatched' or 'running').
+    Runs that have already reached a terminal state (succeeded, failed, etc.)
+    are left untouched to prevent a watchdog/kill race from overwriting the
+    real outcome.
+    """
     now = datetime.now(UTC).isoformat()
     conn.execute(
-        "UPDATE cloud_runs SET status='revoked', completed_at=? WHERE oz_run_id=?",
+        "UPDATE cloud_runs SET status='revoked', completed_at=? "
+        "WHERE oz_run_id=? AND status IN ('dispatched', 'running')",
         (now, oz_run_id),
     )
     conn.commit()
+
+
+def kill_all_active_cloud_runs(
+    conn: sqlite3.Connection,
+) -> list[dict[str, Any]]:
+    """Return all active (dispatched/running) cloud run records and mark them revoked.
+
+    This is the nuclear recovery option for firestorms.  Callers are responsible
+    for actually invoking ``kill_cloud_run()`` per record — this function only
+    updates the registry so the state is consistent even if the oz CLI fails.
+
+    Returns the list of runs that were active before the call (for reporting).
+    """
+    active = list_cloud_runs(conn, active_only=True)
+    now = datetime.now(UTC).isoformat()
+    if active:
+        placeholders = ",".join("?" for _ in active)
+        # Include status guard (same as mark_cloud_run_revoked) so that a run
+        # reaching a terminal state between the snapshot and this UPDATE keeps
+        # its real outcome rather than being silently overwritten with 'revoked'.
+        conn.execute(
+            f"UPDATE cloud_runs SET status='revoked', completed_at=?"
+            f" WHERE oz_run_id IN ({placeholders})"
+            f" AND status IN ('dispatched', 'running')",
+            [now, *(r["oz_run_id"] for r in active)],
+        )
+        conn.commit()
+    return active
+
+
+def count_active_cloud_runs(conn: sqlite3.Connection) -> int:
+    """Return the number of cloud runs currently in dispatched or running state."""
+    row = conn.execute(
+        "SELECT COUNT(*) FROM cloud_runs WHERE status IN ('dispatched', 'running')"
+    ).fetchone()
+    return int(row[0]) if row else 0
 
 
 # ---------------------------------------------------------------------------
