@@ -181,7 +181,6 @@ def export_deals_to_excel(
     title: str,
     *,
     style: str = "light",   # "light" or "full"
-    db_path: str | Path | None = None,  # only used if you pass rows instead of deals
 ) -> Path:
     """
     Take a list of deals (or raw search result rows) and write them to
@@ -260,5 +259,4 @@ def query_and_export_excel(
         output_path=output_path,
         title=title,
         style=style,
-        db_path=db_path,
     )

@@ -405,7 +405,15 @@ def _generate_light_excel(
     output_path: Path,
     title: str,
 ) -> None:
-    """Simple, clean single-sheet Excel with the exact deals requested."""
+    """Simple, clean single-sheet Excel with the exact deals requested.
+
+    Layout:
+      Row 1  — title
+      Row 2  — subtitle
+      Row 3  — column headers  (freeze above here → rows 1-3 fixed)
+      Row 4+ — one row per deal
+    """
+    _header_row = 3
     wb = Workbook()
     ws = wb.active
     ws.title = "Selected Deals"
@@ -425,9 +433,15 @@ def _generate_light_excel(
         "Qualified?",
         "Sources",
     ]
-    write_headers(ws, headers)
+    # Write headers at row 3 directly — write_headers() hardcodes row=1 and
+    # would clobber the title cell set above.
+    for col, header in enumerate(headers, start=1):
+        hdr_cell = ws.cell(row=_header_row, column=col, value=header)
+        hdr_cell.font = Font(bold=True)
+        hdr_cell.fill = PatternFill(fill_type="solid", fgColor=HEADER_FILL)
+        hdr_cell.alignment = Alignment(wrap_text=True)
 
-    for row_idx, deal in enumerate(deals, start=3):
+    for row_idx, deal in enumerate(deals, start=_header_row + 1):  # data starts at row 4
         multiples_text = "; ".join(deal.multiples) if deal.multiples else ""
         sources_text = "; ".join(deal.source_urls) if deal.source_urls else ""
 
@@ -441,15 +455,16 @@ def _generate_light_excel(
             sources_text,
         ]
         for col_idx, value in enumerate(values, start=1):
-            cell = ws.cell(row=row_idx, column=col_idx, value=value)
-            cell.alignment = Alignment(wrap_text=True, vertical="top")
+            data_cell = ws.cell(row=row_idx, column=col_idx, value=value)
+            data_cell.alignment = Alignment(wrap_text=True, vertical="top")
 
     # Auto-size columns reasonably
     for col_cells in ws.columns:
-        max_length = max(len(str(cell.value or "")) for cell in col_cells)
+        max_length = max(len(str(c.value or "")) for c in col_cells)  # use 'c' to avoid shadow
         ws.column_dimensions[col_cells[0].column_letter].width = min(max_length + 2, 50)
 
-    ws.freeze_panes = "A3"
-    ws.auto_filter.ref = f"A3:G{2 + len(deals)}"
+    last_row = _header_row + len(deals)  # row 3 when empty; row 3+N when N deals present
+    ws.freeze_panes = "A4"  # freeze title, subtitle, and headers (rows 1-3)
+    ws.auto_filter.ref = f"A{_header_row}:G{last_row}"
 
     wb.save(output_path)

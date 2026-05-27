@@ -179,6 +179,17 @@ def test_generate_comps_excel_from_deals_light_and_full(tmp_path: Path) -> None:
     assert light_path.exists()
     wb = load_workbook(light_path)
     assert "Selected Deals" in wb.sheetnames
+    ws = wb["Selected Deals"]
+    # Row 1 must hold the title — not overwritten by write_headers (regression guard)
+    assert (
+        ws["A1"].value == "Test Light"
+    ), f"Title cell A1 overwritten — expected 'Test Light', got {ws['A1'].value!r}"
+    assert ws["A2"].value is not None, "Subtitle missing from A2"
+    assert "PTBot" in ws["A2"].value, "PTBot branding missing from subtitle at A2"
+    # Column headers must be at row 3, data at row 4+
+    assert (
+        ws.cell(row=3, column=1).value == "Target"
+    ), f"Headers not at row 3 — A3 = {ws.cell(row=3, column=1).value!r}"
 
     full_path = tmp_path / "full.xlsx"
     generate_comps_excel_from_deals(deals, full_path, "Test Full", style="full")
