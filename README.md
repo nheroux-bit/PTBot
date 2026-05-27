@@ -10,6 +10,7 @@ PTBot is a two-pass precedent transaction research bot for Warp/Oz agents. It di
 - Runs deal-aware deep-dive agents on the qualified transaction set.
 - Produces a final QC-reviewed precedent transaction report.
 - Generates supporting markdown, JSON metadata, PDF output, and an Excel comps workbook.
+- Persists every run and its deal candidates to a local SQLite database for cross-run queries and sweeps.
 
 ## Requirements
 
@@ -26,7 +27,7 @@ task setup
 
 This creates `.venv`, installs PTBot in editable mode, and installs development dependencies.
 
-## Usage
+## Running a single analysis
 
 Preview the generated pipeline configuration without running agents:
 
@@ -47,111 +48,37 @@ Run a full precedent transaction analysis:
   --geography "Boston" \
   --start-date 2024-01-01 \
   --end-date 2024-12-31 \
-  --output-dir ./precedent-txn-output
+  --output-dir ./precedent-txn-output \
+  --db-path ~/.ptbot/ptbot.db
 ```
 
-Optional filters:
+Flags:
 
-- `--min-multiples`: minimum number of standard multiples required per included deal
-- `--deal-size-min`: minimum deal size filter
-- `--deal-size-max`: maximum deal size filter
-- `--timeout`: per-agent timeout in seconds, defaulting to `900`
-- `--output-dir`: output directory, defaulting to `./precedent-txn-output`
-- `--db-path`: SQLite database path (e.g. `~/.ptbot/ptbot.db`). Omit to skip persistence.
+- `--sector` / `--industry`: sector or industry vertical
+- `--geography`: geographic scope
+- `--min-multiples`: minimum standard multiples required per deal (default: 1)
+- `--deal-size-min` / `--deal-size-max`: deal size filters
+- `--timeout`: per-agent timeout in seconds (default: 900)
+- `--output-dir`: output directory (default: `./precedent-txn-output`)
+- `--db-path`: SQLite database path. When provided, runs and deals are persisted for cross-run queries and sweeps. Omit to skip persistence.
+- `--config-only`: print the generated config JSON and exit
 
-When `--db-path` is provided, the run is recorded in a local SQLite database alongside all deal candidates and their qualified status. This enables cross-run queries and powers the sweep runner.
+## Outputs
 
-## Sweep runner
+A full run writes:
 
-`ptbot-sweep` builds a deal database automatically by running `ptbot` across a configurable set of markets and annual time windows. Combinations already present in the database are detected and skipped, so the sweep can be interrupted and resumed freely.
-
-### 1. Create a config file
-
-Copy `sweep.example.toml` and edit the `[[markets]]` list:
-
-```toml
-[sweep]
-years_back = 10
-db_path = "~/.ptbot/ptbot.db"
-output_base_dir = "./precedent-txn-output"
-min_multiples = 1
-timeout = 900
-
-[[markets]]
-sector = "Vertical SaaS"
-geography = "United States"
-
-[[markets]]
-sector = "HealthTech"
-geography = "United States"
-```
-
-### 2. Preview the planned runs
-
-```bash
-.venv/bin/ptbot-sweep --config my-sweep.toml --dry-run
-```
-
-Prints every `(sector, geography, year)` combination that would be executed — no agents are invoked.
-
-### 3. Run the sweep
-
-```bash
-.venv/bin/ptbot-sweep --config my-sweep.toml
-```
-
-Runs all combinations sequentially, oldest year first. Progress is printed as each run completes:
-
-```
-[sweep] 2 market(s) × 11 windows = 22 combinations
-[sweep] run   Vertical SaaS / United States 2016 ...
-[sweep] done  Vertical SaaS / United States 2016
-[sweep] run   Vertical SaaS / United States 2017 ...
-...
-[sweep] complete — 22 run(s), 0 skipped
-```
-
-On a subsequent run, completed combinations are skipped automatically:
-
-```
-[sweep] skip  Vertical SaaS / United States 2016
-[sweep] skip  Vertical SaaS / United States 2017
-...
-[sweep] complete — 0 run(s), 22 skipped
-```
-
-### Skip logic
-
-Before each run the sweep queries the SQLite database for an existing row in the `runs` table whose stored `params` JSON matches the exact `(sector, geography, start_date, end_date)` combination. If a match is found the combination is skipped without calling any agents. This means:
-
-- Interrupting a sweep mid-way and restarting resumes from the first incomplete combination.
-- Adding new markets to the config only runs those new combinations.
-- Re-running the same config after it fully completes is a no-op.
-
-### Output layout
-
-Each annual run writes its outputs under a slugified path:
-
-```
-{output_base_dir}/{sector-slug}/{geography-slug}/{year}/
-  final_deliverable.md
-  final_deliverable.pdf
-  precedent_comps.xlsx
-  supporting/
-  metadata/
-```
-
-For example: `./precedent-txn-output/vertical-saas/united-states/2023/`
-
-### Sweep CLI options
-
-- `--config` (required): path to TOML config file
-- `--db-path`: override the `db_path` from config
-- `--dry-run`: print planned runs without executing any agents
+- `final_deliverable.md`: QC-reviewed markdown report
+- `final_deliverable.pdf`: PDF version of the final report
+- `precedent_comps.xlsx`: IB-formatted Excel comps workbook
+- `supporting/qualified_deals.json`: filtered deal manifest
+- `supporting/pass1_compiled_deals.md`: compiled discovery scout output
+- `supporting/pass2_compiled_deep.md`: compiled deep-dive output
+- `supporting/qc_report.md`: QC agent output
+- `metadata/run_metadata.json`: run parameters and agent execution metadata
 
 ## Auto-populating the database
 
-`ptbot sweep:auto` populates the deal database from the command line — no TOML config file needed:
+`ptbot sweep:auto` is the fastest way to populate the database — no TOML config file needed. Pass sectors as a comma-separated list and PTBot dispatches parallel cloud agents across all missing market×year combinations:
 
 ```bash
 # Sweep two sectors over the last 5 years using cloud agents (recommended)
@@ -175,6 +102,7 @@ For example: `./precedent-txn-output/vertical-saas/united-states/2023/`
 ```
 
 Flags:
+
 - `--sectors` (required): comma-separated list of sectors
 - `--geography` (required): geographic scope applied to all sectors
 - `--years N`: years to look back (default: 5)
@@ -182,22 +110,98 @@ Flags:
 - `--max-workers N`: parallel pipeline cap (default: 4)
 - `--timeout N`: per-pipeline agent timeout in seconds (default: 900)
 - `--db-path PATH`: SQLite database (default: `~/.ptbot/ptbot.db`)
+- `--max-active N`: abort if N or more cloud runs are already active — see [Cloud safeguards](#cloud-safeguards) (default: 10)
 - `--dry-run`: print planned runs without invoking agents
 
 Combinations already present in the database are skipped automatically, so it is safe to re-run.
 
+## Sweep runner (TOML-based)
+
+`ptbot-sweep` builds a deal database from a TOML config file. Use this for version-controlled configurations or advanced settings.
+
+### 1. Create a config file
+
+Copy `sweep.example.toml` and edit the `[[markets]]` list:
+
+```toml
+[sweep]
+years_back = 10
+db_path = "~/.ptbot/ptbot.db"
+output_base_dir = "./precedent-txn-output"
+min_multiples = 1
+timeout = 900
+max_workers = 4            # parallel pipelines
+max_active_cloud_runs = 10 # WIP cap (see Cloud safeguards)
+
+[[markets]]
+sector = "Vertical SaaS"
+geography = "United States"
+
+[[markets]]
+sector = "HealthTech"
+geography = "United States"
+```
+
+### 2. Preview the planned runs
+
+```bash
+.venv/bin/ptbot-sweep --config my-sweep.toml --dry-run
+```
+
+### 3. Run the sweep
+
+```bash
+# Local agents
+.venv/bin/ptbot-sweep --config my-sweep.toml
+
+# Cloud agents (parallel)
+.venv/bin/ptbot-sweep --config my-sweep.toml --cloud --environment <oz-env-id>
+```
+
+Progress is printed as each run completes. On a subsequent run, completed combinations are skipped automatically.
+
+### Skip logic
+
+Before each run the sweep checks the database for a row matching the exact `(sector, geography, start_date, end_date)` combination. If found, that combination is skipped. This means:
+
+- Interrupting a sweep mid-way and restarting resumes from the first incomplete combination.
+- Adding new markets to the config only runs those new combinations.
+- Re-running a fully completed config is a no-op.
+
+### Output layout
+
+Each annual run writes under a slugified path:
+
+```
+{output_base_dir}/{sector-slug}/{geography-slug}/{year}/
+  final_deliverable.md
+  final_deliverable.pdf
+  precedent_comps.xlsx
+  supporting/
+  metadata/
+```
+
+### Sweep CLI options
+
+- `--config` (required): path to TOML config file
+- `--db-path`: override `db_path` from config
+- `--cloud`: dispatch cloud agents instead of local agents
+- `--environment ENV_ID`: Oz cloud environment ID (for `--cloud` runs)
+- `--max-active N`: WIP cap override
+- `--dry-run`: print planned runs without executing any agents
+
 ## Querying the database
 
-Once the database has been populated (via `--db-path` or `ptbot-sweep`), explore it from the terminal:
+Once the database has been populated, explore it from the terminal:
 
 ```bash
 # List recent pipeline runs with deal counts
-.venv/bin/ptbot query runs --db-path ~/.ptbot/ptbot.db
+.venv/bin/ptbot query runs
 
-# Search deals by sector and show only qualified ones
+# Search deals by sector (qualified only)
 .venv/bin/ptbot query deals --sector "FinTech" --qualified-only
 
-# Export all deals matching a filter to CSV
+# Export to CSV
 .venv/bin/ptbot query export --sector "FinTech" --output fintech-deals.csv
 
 # Export to JSON for scripting
@@ -208,51 +212,91 @@ Once the database has been populated (via `--db-path` or `ptbot-sweep`), explore
 .venv/bin/ptbot query deals --geography "United States" --format json
 ```
 
-Flags available on all `query` subcommands:
-- `--db-path`: path to the SQLite database (default: `~/.ptbot/ptbot.db`)
-- `--format table|json` (or `csv|json` for `export`)
+Subcommands and flags:
 
-Additional flags:
-- `query runs`: `--limit N`, `--since YYYY-MM-DD`
-- `query deals`: `--sector`, `--geography`, `--since`, `--qualified-only`, `--limit N`
-- `query export`: `--sector`, `--geography`, `--qualified-only`, `--limit N`, `--output FILE`
+| Subcommand | Key flags |
+|---|---|
+| `query runs` | `--limit N`, `--since YYYY-MM-DD`, `--format table\|json` |
+| `query deals` | `--sector`, `--geography`, `--since`, `--qualified-only`, `--limit N`, `--format table\|json` |
+| `query export` | `--sector`, `--geography`, `--qualified-only`, `--limit N`, `--output FILE`, `--format csv\|json` |
 
-## Outputs
+All subcommands accept `--db-path` (default: `~/.ptbot/ptbot.db`).
 
-A full run writes:
+## Streamlit dashboard
 
-- `final_deliverable.md`: QC-reviewed markdown report
-- `final_deliverable.pdf`: PDF version of the final report
-- `precedent_comps.xlsx`: IB-formatted Excel comps workbook
-- `supporting/qualified_deals.json`: filtered deal manifest
-- `supporting/pass1_compiled_deals.md`: compiled discovery scout output
-- `supporting/pass2_compiled_deep.md`: compiled deep-dive output
-- `supporting/qc_report.md`: QC agent output
-- `metadata/run_metadata.json`: run parameters and agent execution metadata
+Launch the interactive deal database dashboard:
+
+```bash
+.venv/bin/ptbot app
+```
+
+The dashboard provides:
+
+- Deal browser with sector/geography/year/qualification filters and Plotly charts
+- Run history and statistics
+- ☁️ Cloud Control page: list active cloud dispatches and kill individual runs
+
+## Cloud control plane
+
+PTBot tracks every cloud agent dispatch in a persistent SQLite registry (`cloud_runs` table). This survives parent-process death and enables reliable revocation even after a crash.
+
+```bash
+# List active cloud runs
+.venv/bin/ptbot cloud status
+
+# List all runs including completed/revoked
+.venv/bin/ptbot cloud status --all
+
+# Kill a specific run
+.venv/bin/ptbot cloud kill <oz-run-id>
+.venv/bin/ptbot cloud kill <oz-run-id> --force  # mark revoked even if oz CLI fails
+
+# Kill every active run — firedrill recovery
+.venv/bin/ptbot cloud kill-all
+.venv/bin/ptbot cloud kill-all --dry-run        # preview without acting
+```
+
+All commands accept `--db-path` to target a non-default registry.
+
+## Cloud safeguards
+
+Three safeguards prevent runaway cloud agent storms:
+
+**1. `ptbot cloud kill-all`** — nuclear recovery. One command kills every active run in the registry and marks all revoked in the DB, even when the oz CLI fails. Use `--dry-run` to preview.
+
+**2. WIP cap** — `sweep:auto` and `ptbot-sweep --cloud` check the registry before dispatching. If active cloud runs ≥ `--max-active` (default: 10), the command aborts immediately with a list of blocking run IDs. Run `ptbot cloud kill-all` to clear them, or raise `--max-active`.
+
+**3. Timeout watchdog** — a daemon thread launched automatically during cloud sweeps. Polls every 60 seconds and kills any run past `timeout × 1.5` seconds without a terminal status. Stops cleanly on sweep completion or Ctrl-C.
 
 ## Development
 
 ```bash
-task fmt
-task lint
-task test
-task test:coverage
-task build
-task check
+task fmt           # Format source
+task lint          # Lint + type-check
+task test          # Run tests
+task test:coverage # Tests with coverage gate (≥85%)
+task build         # Compile package
+task check         # Pre-commit gate (all of the above)
 ```
-
-`task check` is the pre-commit gate and runs formatting checks, linting, type checking, tests with coverage, and package compilation.
 
 ## Project structure
 
-- `src/ptbot/cli.py`: `ptbot` command-line interface
-- `src/ptbot/orchestrator.py`: two-pass agent orchestration and output writing
-- `src/ptbot/prompt_builder.py`: scout, deep-dive, QC, and config prompt generation
-- `src/ptbot/models.py`: validated data models
-- `src/ptbot/pdf.py`: markdown-to-PDF generation
-- `src/ptbot/excel.py`: Excel comps workbook generation
-- `src/ptbot/db.py`: SQLite persistence layer (runs and deals tables)
-- `src/ptbot/sweep.py`: sweep runner logic (config models, window generation, orchestration)
-- `src/ptbot/sweep_cli.py`: `ptbot-sweep` command-line interface
-- `sweep.example.toml`: annotated sweep config template
-- `tests/`: unit and integration tests
+```
+src/ptbot/
+  cli.py            ptbot CLI: single run, sweep:auto, query, cloud commands
+  orchestrator.py   Two-pass agent orchestration and output writing
+  prompt_builder.py Scout, deep-dive, QC, and config prompt generation
+  models.py         Validated data models (DealCandidate, ResearchParams)
+  pdf.py            Markdown-to-PDF generation
+  excel.py          IB-formatted Excel comps workbook generation
+  db.py             SQLite persistence: runs, deals, cloud_runs tables
+  db_sync.py        S3 pull/push helpers for cloud-backed DB persistence
+  sweep.py          Sweep runner: WIP cap, watchdog thread, parallel executor
+  sweep_cli.py      ptbot-sweep CLI
+  app.py            Streamlit deal database dashboard
+  runners.py        Local and cloud Oz agent runners with control plane
+
+sweep.example.toml  Annotated sweep config template
+skill/              Warp/Oz skill scripts (precedent-transactions, etc.)
+tests/              164 tests, 87.7% coverage
+```
