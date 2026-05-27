@@ -419,7 +419,7 @@ def _handle_sweep_auto_command(argv: Sequence[str]) -> int:
         )
 
     try:
-        run_sweep(
+        failures = run_sweep(
             config,
             dry_run=args.dry_run,
             db_path_override=db_path,
@@ -430,7 +430,7 @@ def _handle_sweep_auto_command(argv: Sequence[str]) -> int:
     except RuntimeError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    return 0
+    return 1 if failures else 0
 
 
 def build_parser() -> argparse.ArgumentParser:

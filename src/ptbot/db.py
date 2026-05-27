@@ -348,9 +348,13 @@ def kill_all_active_cloud_runs(
     now = datetime.now(UTC).isoformat()
     if active:
         placeholders = ",".join("?" for _ in active)
+        # Include status guard (same as mark_cloud_run_revoked) so that a run
+        # reaching a terminal state between the snapshot and this UPDATE keeps
+        # its real outcome rather than being silently overwritten with 'revoked'.
         conn.execute(
             f"UPDATE cloud_runs SET status='revoked', completed_at=?"
-            f" WHERE oz_run_id IN ({placeholders})",
+            f" WHERE oz_run_id IN ({placeholders})"
+            f" AND status IN ('dispatched', 'running')",
             [now, *(r["oz_run_id"] for r in active)],
         )
         conn.commit()
