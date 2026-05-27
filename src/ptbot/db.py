@@ -326,6 +326,38 @@ def mark_cloud_run_revoked(conn: sqlite3.Connection, oz_run_id: str) -> None:
     conn.commit()
 
 
+def kill_all_active_cloud_runs(
+    conn: sqlite3.Connection,
+) -> list[dict[str, Any]]:
+    """Return all active (dispatched/running) cloud run records and mark them revoked.
+
+    This is the nuclear recovery option for firestorms.  Callers are responsible
+    for actually invoking ``kill_cloud_run()`` per record — this function only
+    updates the registry so the state is consistent even if the oz CLI fails.
+
+    Returns the list of runs that were active before the call (for reporting).
+    """
+    active = list_cloud_runs(conn, active_only=True)
+    now = datetime.now(UTC).isoformat()
+    if active:
+        placeholders = ",".join("?" for _ in active)
+        conn.execute(
+            f"UPDATE cloud_runs SET status='revoked', completed_at=?"
+            f" WHERE oz_run_id IN ({placeholders})",
+            [now, *(r["oz_run_id"] for r in active)],
+        )
+        conn.commit()
+    return active
+
+
+def count_active_cloud_runs(conn: sqlite3.Connection) -> int:
+    """Return the number of cloud runs currently in dispatched or running state."""
+    row = conn.execute(
+        "SELECT COUNT(*) FROM cloud_runs WHERE status IN ('dispatched', 'running')"
+    ).fetchone()
+    return int(row[0]) if row else 0
+
+
 # ---------------------------------------------------------------------------
 # New: Database querying layer for agents (exploration + precise selection)
 # Goal: Allow agents to understand what's in the DB and pull exact sets of

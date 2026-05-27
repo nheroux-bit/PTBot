@@ -371,6 +371,12 @@ def _handle_sweep_auto_command(argv: Sequence[str]) -> int:
         help="Per-pipeline agent timeout in seconds (default: 900)",
     )
     parser.add_argument(
+        "--max-active",
+        type=int,
+        default=10,
+        help="Abort if this many cloud runs are already active in the registry (default: 10)",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Print planned runs without invoking any agents",
@@ -418,6 +424,7 @@ def _handle_sweep_auto_command(argv: Sequence[str]) -> int:
         db_path_override=db_path,
         cloud=use_cloud,
         cloud_environment=args.environment,
+        max_active_cloud_runs=args.max_active,
     )
     return 0
 
@@ -491,6 +498,16 @@ def _handle_cloud_command(argv: Sequence[str]) -> int:
         help="Mark revoked in registry even if oz kill command fails",
     )
 
+    kill_all_p = sub.add_parser(
+        "kill-all",
+        help="Nuclear option: kill every active cloud run in the registry (firedrill recovery)",
+    )
+    kill_all_p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print what would be killed without taking action",
+    )
+
     # Support "cloud:status" as argv[0] too
     args = parser.parse_args(argv[1:] if argv and argv[0].startswith("cloud") else argv)
 
@@ -532,6 +549,41 @@ def _handle_cloud_command(argv: Sequence[str]) -> int:
                 f"    parent={r.get('parent','') } env={r.get('environment','')}\n"
                 f"    url={r.get('run_url','')}"
             )
+        conn.close()
+        return 0
+
+    if args.subcommand == "kill-all":
+        dry_run = getattr(args, "dry_run", False)
+        if dry_run:
+            active = _db.list_cloud_runs(conn, active_only=True)
+            if not active:
+                print("No active cloud runs to kill.")
+            else:
+                print(f"Would kill {len(active)} active run(s) (--dry-run):")
+                for r in active:
+                    run_url = r.get("run_url", "")
+                    print(f"  {r['oz_run_id'][:12]}...  status={r['status']}  url={run_url}")
+            conn.close()
+            return 0
+        active = _db.kill_all_active_cloud_runs(conn)
+        if not active:
+            print("No active cloud runs found. Registry already clean.")
+            conn.close()
+            return 0
+        print(f"Killing {len(active)} active run(s)...")
+        killed = failed_ids = 0
+        for r in active:
+            success, msg = kill_cloud_run(r["oz_run_id"], r.get("run_url", ""))
+            status = "ok" if success else "oz-fail (registry already revoked)"
+            print(f"  {r['oz_run_id'][:12]}...  {status}: {msg.split(chr(10))[0][:80]}")
+            if success:
+                killed += 1
+            else:
+                failed_ids += 1
+        print(
+            f"kill-all complete: {killed} killed via oz, "
+            f"{failed_ids} oz-unreachable (all marked revoked in registry)."
+        )
         conn.close()
         return 0
 
@@ -605,7 +657,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     # Early dispatch for cloud control plane (does not consume the run parser)
     if (
         raw_argv
-        and raw_argv[0] in {"cloud", "cloud:status", "cloud:kill"}
+        and raw_argv[0] in {"cloud", "cloud:status", "cloud:kill", "cloud:kill-all"}
         or (raw_argv and raw_argv[0].startswith("cloud:"))
     ):
         # normalise "cloud:xxx" -> cloud subcommand; keep --db-path before sub for argparse
