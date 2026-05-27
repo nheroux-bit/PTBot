@@ -274,3 +274,101 @@ def test_watchdog_does_not_kill_fresh_run(tmp_path: Path) -> None:
 
     # Fresh run should NOT be killed (not overdue)
     assert "fresh-run" not in killed_ids
+
+
+# ---------------------------------------------------------------------------
+# WIP cap RuntimeError CLI handling
+# ---------------------------------------------------------------------------
+
+
+def test_sweep_cli_wip_cap_returns_exit_code_1(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """sweep_cli.main catches RuntimeError from WIP cap and returns 1."""
+    from ptbot.sweep_cli import main as sweep_main
+
+    db_path = _make_db(tmp_path)
+    for i in range(3):
+        _add_active_run(db_path, f"block-run-{i}")
+
+    config_path = tmp_path / "sweep.toml"
+    config_path.write_text(
+        '[sweep]\nyears_back = 1\ndb_path = "'
+        + str(db_path)
+        + '"\nmax_active_cloud_runs = 3\n\n[[markets]]\nsector = "Test"\ngeography = "US"\n'
+    )
+
+    rc = sweep_main(["--config", str(config_path), "--cloud"])
+    assert rc == 1
+    captured = capsys.readouterr()
+    assert "WIP cap reached" in captured.err
+
+
+def test_cli_sweep_auto_wip_cap_returns_exit_code_1(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """_handle_sweep_auto_command catches RuntimeError from WIP cap and returns 1."""
+    db_path = _make_db(tmp_path)
+    for i in range(2):
+        _add_active_run(db_path, f"auto-block-{i}")
+
+    rc = main(
+        [
+            "sweep:auto",
+            "--sectors",
+            "Test",
+            "--geography",
+            "US",
+            "--environment",
+            "test-env",
+            "--db-path",
+            str(db_path),
+            "--max-active",
+            "2",
+        ]
+    )
+    assert rc == 1
+    captured = capsys.readouterr()
+    assert "WIP cap reached" in captured.err
+
+
+# ---------------------------------------------------------------------------
+# Watchdog kill-failure logging
+# ---------------------------------------------------------------------------
+
+
+def test_watchdog_logs_kill_failure(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """Watchdog should log to stderr when kill_cloud_run fails."""
+    db_path = _make_db(tmp_path)
+
+    # Seed an overdue run
+    conn = open_db(db_path)
+    register_cloud_dispatch(conn, "fail-kill-run", parent="test")
+    from datetime import UTC, datetime, timedelta
+
+    old_ts = (datetime.now(UTC) - timedelta(hours=3)).isoformat()
+    conn.execute(
+        "UPDATE cloud_runs SET dispatched_at=? WHERE oz_run_id=?", (old_ts, "fail-kill-run")
+    )
+    conn.commit()
+    conn.close()
+
+    stop = threading.Event()
+
+    def failing_kill(run_id: str, run_url: str = "") -> tuple[bool, str]:
+        return False, "oz CLI unreachable\ndetail line"
+
+    with patch("ptbot.runners.kill_cloud_run", failing_kill):
+        t = threading.Thread(
+            target=_watchdog_thread,
+            args=(db_path, 1, stop, 0.01),
+            daemon=True,
+        )
+        t.start()
+        time.sleep(0.1)
+        stop.set()
+        t.join(timeout=2)
+
+    captured = capsys.readouterr()
+    assert "oz kill failed" in captured.err
+    assert "oz CLI unreachable" in captured.err

@@ -191,7 +191,13 @@ def _watchdog_thread(
                             f"{timeout_secs * deadline_factor:.0f}s) — killing {rid[:12]}...",
                             file=sys.stderr,
                         )
-                        kill_cloud_run(rid, run.get("run_url", ""))
+                        ok, kill_msg = kill_cloud_run(rid, run.get("run_url", ""))
+                        if not ok:
+                            print(
+                                f"[sweep:watchdog] oz kill failed for {rid[:12]}...: "
+                                f"{kill_msg.splitlines()[0][:80]}",
+                                file=sys.stderr,
+                            )
                         _db.mark_cloud_run_revoked(conn, rid)
             finally:
                 conn.close()
@@ -353,6 +359,8 @@ def run_sweep(
                     failed += 1
     finally:
         stop_watchdog.set()  # always stop the watchdog, even on error / Ctrl-C
+        if wdog is not None:
+            wdog.join(timeout=5)
 
     summary = f"[sweep] complete — {completed} run(s), {skipped} skipped"
     if failed:

@@ -72,14 +72,18 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     db_path_override = Path(args.db_path).expanduser() if args.db_path else None
 
-    run_sweep(
-        config,
-        dry_run=args.dry_run,
-        db_path_override=db_path_override,
-        cloud=args.cloud,
-        cloud_environment=args.environment,
-        max_active_cloud_runs=args.max_active,
-    )
+    try:
+        run_sweep(
+            config,
+            dry_run=args.dry_run,
+            db_path_override=db_path_override,
+            cloud=args.cloud,
+            cloud_environment=args.environment,
+            max_active_cloud_runs=args.max_active,
+        )
+    except RuntimeError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
     return 0
 
 
