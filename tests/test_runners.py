@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import json
 import subprocess
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from ptbot.runners import (
     _parse_oz_output,
@@ -201,3 +204,69 @@ def test_make_cloud_runner_result_is_normalizable() -> None:
     result = normalize_result(raw)
     assert result.state == "SUCCEEDED"
     assert result.output == "answer"
+
+
+# ---------------------------------------------------------------------------
+# Streaming cloud runner with early registry registration (cloud-control-001)
+# ---------------------------------------------------------------------------
+
+
+def test_run_cloud_agent_with_registry_db_path_registers_early(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Streaming path with registry_db_path must register early on run_started event."""
+    from ptbot import db as _db
+
+    registry_db = tmp_path / "reg.db"
+    conn = _db.open_db(registry_db)
+    conn.close()
+
+    # Simulate NDJSON that delivers run_started very early
+    ndjson = (
+        '{"type":"system","event_type":"run_started","run_id":"oz-early-123","run_url":"https://u"}\n'
+        '{"type":"agent","text":"some output"}\n'
+    )
+
+    class FakeProc:
+        def __init__(self) -> None:
+            self._lines = ndjson.splitlines(keepends=True)
+            self.returncode = 0
+            self.stdout = self
+
+        def poll(self) -> int | None:
+            return 0 if not self._lines else None
+
+        def readline(self) -> str:
+            return self._lines.pop(0) if self._lines else ""
+
+        def read(self) -> str:
+            return ""
+
+    monkeypatch.setattr("ptbot.runners.subprocess.Popen", lambda *a, **k: FakeProc())
+
+    captured: list[dict] = []
+
+    orig_register = _db.register_cloud_dispatch
+    orig_update = _db.update_cloud_run
+
+    def spy_register(c, run_id, **kwargs):  # type: ignore[no-untyped-def]
+        captured.append({"run_id": run_id, "kwargs": kwargs})
+        return orig_register(c, run_id, **kwargs)
+
+    def spy_update(c, run_id, status):  # type: ignore[no-untyped-def]
+        captured.append({"update": (run_id, status)})
+        return orig_update(c, run_id, status)
+
+    monkeypatch.setattr(_db, "register_cloud_dispatch", spy_register)
+    monkeypatch.setattr(_db, "update_cloud_run", spy_update)
+
+    result = run_cloud_agent(
+        "prompt with registry",
+        timeout=5,
+        registry_db_path=registry_db,
+        parent_context="sweep:test:2026",
+        environment="env-xyz",
+    )
+
+    assert result["run_id"] == "oz-early-123"
+    assert any(c.get("run_id") == "oz-early-123" for c in captured)

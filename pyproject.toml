@@ -64,7 +64,10 @@ addopts = "--cov=ptbot --cov-report=term-missing --cov-report=html"
 
 [tool.coverage.run]
 source = ["src/ptbot"]
-omit = ["*/tests/*"]
+omit = [
+    "*/tests/*",
+    "src/ptbot/app.py",  # Streamlit dashboard (optional UI layer, no core pipeline logic)
+]
 
 [tool.coverage.report]
 fail_under = 85

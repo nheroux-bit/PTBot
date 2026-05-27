@@ -299,10 +299,9 @@ def run_cloud_agent(
             "error": error,
         }
 
-    except subprocess.TimeoutExpired:
-        state = "TIMED_OUT"
-        error = f"Exceeded {timeout}s"
     except Exception as exc:  # noqa: BLE001 - boundary
+        # Note: manual timeout handling (time.time() loop) means
+        # subprocess.TimeoutExpired is never raised here (dead branch per Greptile review).
         state = "FAILED"
         error = str(exc)
 

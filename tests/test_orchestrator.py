@@ -197,3 +197,33 @@ def test_run_pipeline_with_fake_runner(tmp_path: Path) -> None:
     assert paths.final_markdown.read_text(encoding="utf-8").startswith("# Final")
     assert paths.qualified_deals.exists()
     assert len(calls) == 8
+
+
+# ---------------------------------------------------------------------------
+# Runner selection / attack.market fallback
+# ---------------------------------------------------------------------------
+
+
+def test_load_attack_market_runner_raises_when_not_found(tmp_path: Path) -> None:
+    from ptbot.orchestrator import load_attack_market_runner
+
+    nonexistent = tmp_path / "does-not-exist.py"
+    with pytest.raises(FileNotFoundError, match="attack.market orchestrator not found"):
+        load_attack_market_runner(nonexistent)
+
+
+def test_default_runner_falls_back_to_local_when_attack_market_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_load_default_runner falls back to bundled runner when attack.market is missing."""
+    from ptbot import orchestrator as orch
+
+    # Force the attack.market load to fail
+    monkeypatch.setattr(
+        orch,
+        "load_attack_market_runner",
+        lambda p=None: (_ for _ in ()).throw(FileNotFoundError("nope")),
+    )
+
+    runner = orch._load_default_runner()
+    assert runner is orch._run_local_agent
