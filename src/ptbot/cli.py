@@ -315,6 +315,140 @@ def _truncate(s: str, n: int) -> str:
     return s if len(s) <= n else s[: n - 1] + "…"
 
 
+def _handle_db_coverage_command(argv: Sequence[str]) -> int:
+    """Handle ptbot db:coverage — show which sector×year combinations are in the DB."""
+    from . import db as _db
+    from .presets import list_presets, load_preset
+    from .sweep import generate_annual_windows
+
+    parser = argparse.ArgumentParser(
+        prog="ptbot db:coverage",
+        description=(
+            "Show which sector×year combinations exist in the deal database. "
+            "Use --preset to check coverage for a curated sector list, or view "
+            "all sectors found in the DB."
+        ),
+    )
+    parser.add_argument(
+        "--preset",
+        default=None,
+        metavar="NAME",
+        help=f"Sector preset to check coverage for (available: {', '.join(list_presets())})",
+    )
+    parser.add_argument("--geography", default=None, help="Filter by geography")
+    parser.add_argument(
+        "--years",
+        type=int,
+        default=5,
+        help="Number of years to check coverage for (default: 5)",
+    )
+    parser.add_argument(
+        "--db-path",
+        default=None,
+        help="SQLite database path (default: ~/.ptbot/ptbot.db)",
+    )
+
+    argv_list = list(argv)
+    parse_from = argv_list[1:] if argv_list and argv_list[0].startswith("db") else argv_list
+    args = parser.parse_args(parse_from)
+
+    db_path = Path(args.db_path).expanduser() if args.db_path else _default_db_path()
+
+    if not db_path.exists():
+        print(f"Database not found: {db_path}")
+        print("Run ptbot with --db-path or ptbot sweep:auto to create it.")
+        return 0
+
+    conn = _db.open_db(db_path)
+    windows = generate_annual_windows(args.years)
+    years = [w[0][:4] for w in windows]  # ["2021", "2022", ...]
+
+    # Determine sectors to check
+    if args.preset:
+        try:
+            sectors = load_preset(args.preset)
+        except FileNotFoundError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            conn.close()
+            return 1
+    else:
+        # All sectors found in the DB
+        cursor = conn.execute(
+            "SELECT DISTINCT json_extract(params, '$.sector') AS sector "
+            "FROM runs WHERE json_extract(params, '$.sector') IS NOT NULL "
+            "ORDER BY sector"
+        )
+        sectors = [row[0] for row in cursor.fetchall()]
+        if not sectors:
+            print("No runs found in the database yet.")
+            conn.close()
+            return 0
+
+    # Build coverage matrix
+    geography = args.geography
+    total_covered = total_missing = 0
+    rows: list[tuple[str, int, int, int]] = []
+    for sector in sectors:
+        covered = missing = deals = 0
+        for year in years:
+            start = f"{year}-01-01"
+            # Use the window's end date
+            end = next((w[1] for w in windows if w[0][:4] == year), f"{year}-12-31")
+            params: list[object] = [sector]
+            geo_clause = ""
+            if geography:
+                geo_clause = " AND json_extract(params, '$.geography') = ?"
+                params.append(geography)
+            row = conn.execute(
+                "SELECT COUNT(*) FROM runs WHERE "
+                "json_extract(params, '$.sector') = ?"
+                f"{geo_clause}"
+                " AND json_extract(params, '$.start_date') = ?"
+                " AND json_extract(params, '$.end_date') = ?",
+                [*params, start, end],
+            ).fetchone()
+            if row and row[0] > 0:
+                covered += 1
+                deal_row = conn.execute(
+                    "SELECT COUNT(*) FROM deals d JOIN runs r ON d.run_id = r.run_id "
+                    "WHERE json_extract(r.params, '$.sector') = ?"
+                    f"{geo_clause}"
+                    " AND json_extract(r.params, '$.start_date') = ?",
+                    [*params, start],
+                ).fetchone()
+                deals += deal_row[0] if deal_row else 0
+            else:
+                missing += 1
+        rows.append((sector, covered, missing, deals))
+        total_covered += covered
+        total_missing += missing
+
+    conn.close()
+
+    # Print table
+    geo_label = f" ({geography})" if geography else ""
+    print(f"\nDB coverage: {args.preset or 'all sectors'}{geo_label} | last {args.years} years")
+    print(f"DB: {db_path}\n")
+    headers = ["sector", "covered", "missing", "deals"]
+    table_rows = [[_truncate(s, 32), str(c), str(m), str(d)] for s, c, m, d in rows]
+    print(_fmt_table(headers, table_rows))
+    pct = (
+        int(100 * total_covered / (total_covered + total_missing))
+        if (total_covered + total_missing)
+        else 0
+    )
+    print(
+        f"\nTotal: {total_covered}/{total_covered + total_missing} combinations covered ({pct}%)"
+        f" | {sum(r[3] for r in rows)} deals in DB"
+    )
+    if total_missing:
+        print(
+            f"Run `ptbot sweep:auto {'--preset ' + args.preset + ' ' if args.preset else ''}"
+            f"--geography '{geography or 'United States'}' --dry-run` to preview gaps."
+        )
+    return 0
+
+
 def _handle_sweep_auto_command(argv: Sequence[str]) -> int:
     """Handle ptbot sweep:auto — TOML-free parallel cloud sweep orchestrator.
 
@@ -322,6 +456,7 @@ def _handle_sweep_auto_command(argv: Sequence[str]) -> int:
     cloud=True so every pipeline task is dispatched as an oz agent run-cloud.
     The existing ThreadPoolExecutor inside run_sweep() handles parallelism.
     """
+    from .presets import list_presets, load_preset
     from .sweep import MarketTarget, SweepConfig, SweepSettings, run_sweep
 
     parser = argparse.ArgumentParser(
@@ -331,10 +466,17 @@ def _handle_sweep_auto_command(argv: Sequence[str]) -> int:
             "over annual windows using parallel cloud agents. No TOML config needed."
         ),
     )
-    parser.add_argument(
+    sector_group = parser.add_mutually_exclusive_group(required=True)
+    sector_group.add_argument(
         "--sectors",
-        required=True,
-        help="Comma-separated list of sectors/industries to sweep (e.g. 'FinTech,HealthTech')",
+        default=None,
+        help="Comma-separated list of sectors/industries (e.g. 'FinTech,HealthTech')",
+    )
+    sector_group.add_argument(
+        "--preset",
+        default=None,
+        metavar="NAME",
+        help=f"Load sectors from a curated preset (available: {', '.join(list_presets())})",
     )
     parser.add_argument(
         "--geography",
@@ -387,11 +529,19 @@ def _handle_sweep_auto_command(argv: Sequence[str]) -> int:
     parse_from = argv_list[1:] if argv_list and argv_list[0].startswith("sweep") else argv_list
     args = parser.parse_args(parse_from)
 
-    # Parse comma-separated sectors, stripping whitespace
-    sectors = [s.strip() for s in args.sectors.split(",") if s.strip()]
-    if not sectors:
-        print("error: --sectors must contain at least one non-empty sector", file=sys.stderr)
-        return 1
+    # Resolve sectors from --sectors CSV or --preset
+    if args.preset:
+        try:
+            sectors = load_preset(args.preset)
+        except (FileNotFoundError, ValueError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        print(f"[sweep:auto] preset={args.preset} ({len(sectors)} sectors)")
+    else:
+        sectors = [s.strip() for s in (args.sectors or "").split(",") if s.strip()]
+        if not sectors:
+            print("error: --sectors must contain at least one non-empty sector", file=sys.stderr)
+            return 1
 
     db_path = Path(args.db_path).expanduser() if args.db_path else _default_db_path()
 
@@ -649,6 +799,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     full single-run flag set.
     """
     raw_argv: list[str] = list(argv) if argv is not None else sys.argv[1:]
+
+    # Early dispatch for db:coverage
+    if raw_argv and raw_argv[0] == "db:coverage":
+        return _handle_db_coverage_command(raw_argv)
 
     # Early dispatch for sweep:auto
     if raw_argv and raw_argv[0] == "sweep:auto":

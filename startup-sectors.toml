@@ -1,0 +1,182 @@
+# PTBot — Startup Tech Full Coverage Sweep
+#
+# This config sweeps all 38 major tech startup verticals over 10 years.
+# Run with: ptbot-sweep --config startup-sectors.toml --cloud --environment <env-id>
+#
+# The sweep is incremental — existing market×year combinations are skipped
+# automatically. Re-run weekly to keep the database current as new deals close.
+#
+# For a no-config-file alternative, use:
+#   ptbot sweep:auto --preset startup-tech --geography "United States" --environment <env-id>
+
+[sweep]
+years_back = 10
+db_path = "~/.ptbot/ptbot.db"
+output_base_dir = "./precedent-txn-output"
+min_multiples = 1
+timeout = 900
+max_workers = 8              # 8 parallel pipelines for fast coverage
+max_active_cloud_runs = 20   # raised for large sweeps; lower if hitting Oz limits
+
+# --- Finance & Insurance ---
+[[markets]]
+sector = "FinTech"
+geography = "United States"
+
+[[markets]]
+sector = "Payments"
+geography = "United States"
+
+[[markets]]
+sector = "InsurTech"
+geography = "United States"
+
+[[markets]]
+sector = "WealthTech"
+geography = "United States"
+
+# --- Health & Life Sciences ---
+[[markets]]
+sector = "HealthTech"
+geography = "United States"
+
+[[markets]]
+sector = "Digital Health"
+geography = "United States"
+
+[[markets]]
+sector = "BioTech"
+geography = "United States"
+
+# --- AI, Data & Infrastructure ---
+[[markets]]
+sector = "AI / Machine Learning"
+geography = "United States"
+
+[[markets]]
+sector = "Data & Analytics"
+geography = "United States"
+
+[[markets]]
+sector = "MLOps"
+geography = "United States"
+
+[[markets]]
+sector = "Cybersecurity"
+geography = "United States"
+
+[[markets]]
+sector = "Cloud Infrastructure"
+geography = "United States"
+
+[[markets]]
+sector = "DevTools"
+geography = "United States"
+
+# --- Software ---
+[[markets]]
+sector = "Vertical SaaS"
+geography = "United States"
+
+[[markets]]
+sector = "Horizontal SaaS"
+geography = "United States"
+
+[[markets]]
+sector = "Enterprise Software"
+geography = "United States"
+
+# --- Commerce & Marketing ---
+[[markets]]
+sector = "E-commerce"
+geography = "United States"
+
+[[markets]]
+sector = "Retail Tech"
+geography = "United States"
+
+[[markets]]
+sector = "MarTech"
+geography = "United States"
+
+[[markets]]
+sector = "AdTech"
+geography = "United States"
+
+# --- Logistics & Supply Chain ---
+[[markets]]
+sector = "Logistics"
+geography = "United States"
+
+[[markets]]
+sector = "Supply Chain Tech"
+geography = "United States"
+
+# --- Human Capital & Professional Services ---
+[[markets]]
+sector = "EdTech"
+geography = "United States"
+
+[[markets]]
+sector = "HRTech"
+geography = "United States"
+
+[[markets]]
+sector = "LegalTech"
+geography = "United States"
+
+[[markets]]
+sector = "PropTech"
+geography = "United States"
+
+# --- Climate & Agriculture ---
+[[markets]]
+sector = "CleanTech"
+geography = "United States"
+
+[[markets]]
+sector = "Climate Tech"
+geography = "United States"
+
+[[markets]]
+sector = "AgriTech"
+geography = "United States"
+
+# --- Consumer & Media ---
+[[markets]]
+sector = "Gaming"
+geography = "United States"
+
+[[markets]]
+sector = "Media Tech"
+geography = "United States"
+
+[[markets]]
+sector = "TravelTech"
+geography = "United States"
+
+[[markets]]
+sector = "FoodTech"
+geography = "United States"
+
+# --- Deep Tech & Hardware ---
+[[markets]]
+sector = "Robotics & Automation"
+geography = "United States"
+
+[[markets]]
+sector = "Drones"
+geography = "United States"
+
+[[markets]]
+sector = "SpaceTech"
+geography = "United States"
+
+[[markets]]
+sector = "Semiconductors"
+geography = "United States"
+
+# --- Emerging ---
+[[markets]]
+sector = "Crypto / Web3"
+geography = "United States"

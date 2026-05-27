@@ -1,10 +1,11 @@
 {
   "vBRIEFInfo": {
-    "version": "0.6"
+    "version": "0.6",
+    "updated": "2026-05-27T22:28:44Z"
   },
   "plan": {
     "title": "Sector presets — full-coverage startup-tech database bootstrap",
-    "status": "proposed",
+    "status": "running",
     "summary": "Ship a curated list of tech startup sectors and a --preset flag on sweep:auto so one command progressively builds comprehensive M&A coverage across the entire startup ecosystem. A single `ptbot sweep:auto --preset startup-tech --geography 'United States' --environment <env>` sweeps all ~35 sectors over the configured years, filling gaps as it goes.",
     "motivation": "The database gets exponentially more useful as coverage expands across sectors. Today users have to manually enumerate sectors. A preset bakes in the industry knowledge — every major tech vertical is covered — and lets the sweep run unattended, picking up where it left off on each execution. Run it weekly and the database self-maintains.",
     "deliverables": [
@@ -27,18 +28,46 @@
       "ptbot db:coverage must work gracefully when the DB does not exist yet"
     ],
     "startup_tech_sectors": [
-      "FinTech", "Payments", "InsurTech", "WealthTech",
-      "HealthTech", "Digital Health", "BioTech",
-      "AI / Machine Learning", "Data & Analytics", "MLOps",
-      "Cybersecurity", "Cloud Infrastructure", "DevTools",
-      "Vertical SaaS", "Horizontal SaaS", "Enterprise Software",
-      "E-commerce", "Retail Tech", "MarTech", "AdTech",
-      "Logistics", "Supply Chain Tech",
-      "EdTech", "HRTech", "LegalTech", "PropTech",
-      "CleanTech", "Climate Tech", "AgriTech",
-      "Gaming", "Media Tech", "TravelTech", "FoodTech",
-      "Robotics & Automation", "Drones", "SpaceTech",
-      "Crypto / Web3", "Consumer Tech", "Semiconductors"
-    ]
+      "FinTech",
+      "Payments",
+      "InsurTech",
+      "WealthTech",
+      "HealthTech",
+      "Digital Health",
+      "BioTech",
+      "AI / Machine Learning",
+      "Data & Analytics",
+      "MLOps",
+      "Cybersecurity",
+      "Cloud Infrastructure",
+      "DevTools",
+      "Vertical SaaS",
+      "Horizontal SaaS",
+      "Enterprise Software",
+      "E-commerce",
+      "Retail Tech",
+      "MarTech",
+      "AdTech",
+      "Logistics",
+      "Supply Chain Tech",
+      "EdTech",
+      "HRTech",
+      "LegalTech",
+      "PropTech",
+      "CleanTech",
+      "Climate Tech",
+      "AgriTech",
+      "Gaming",
+      "Media Tech",
+      "TravelTech",
+      "FoodTech",
+      "Robotics & Automation",
+      "Drones",
+      "SpaceTech",
+      "Crypto / Web3",
+      "Consumer Tech",
+      "Semiconductors"
+    ],
+    "updated": "2026-05-27T22:28:44Z"
   }
 }

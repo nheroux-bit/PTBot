@@ -76,6 +76,54 @@ A full run writes:
 - `supporting/qc_report.md`: QC agent output
 - `metadata/run_metadata.json`: run parameters and agent execution metadata
 
+## Building full-sector coverage
+
+One command progressively builds comprehensive M&A coverage across all 38 major tech startup verticals:
+
+```bash
+# First run: sweeps all sectors, dispatches ~380 cloud agents (38 sectors × 10 years)
+ptbot sweep:auto \
+  --preset startup-tech \
+  --geography "United States" \
+  --years 10 \
+  --environment <oz-env-id>
+
+# Check what's covered vs. missing
+ptbot db:coverage --preset startup-tech --geography "United States"
+
+# Run again anytime — only missing combinations are dispatched
+ptbot sweep:auto \
+  --preset startup-tech \
+  --geography "United States" \
+  --environment <oz-env-id>
+```
+
+Output from `db:coverage`:
+```
+DB coverage: startup-tech (United States) | last 5 years
+
+sector                    covered  missing  deals
+---------                 -------  -------  -----
+AI / Machine Learning     5        0        847
+Cybersecurity             5        0        612
+FinTech                   5        0        1203
+MLOps                     2        3        88
+...
+
+Total: 187/190 combinations covered (98%) | 14,392 deals in DB
+Run `ptbot sweep:auto --preset startup-tech --geography 'United States' --dry-run` to preview gaps.
+```
+
+The sweep is fully incremental — skip detection means re-running it weekly only fills in the new year's deals. No work is ever duplicated.
+
+Available presets:
+- `startup-tech` — 38 tech startup verticals (FinTech, AI/ML, Cybersecurity, SaaS, HealthTech, CleanTech, etc.)
+
+Or use `startup-sectors.toml` for the TOML-based runner:
+```bash
+ptbot-sweep --config startup-sectors.toml --cloud --environment <oz-env-id>
+```
+
 ## Auto-populating the database
 
 `ptbot sweep:auto` is the fastest way to populate the database — no TOML config file needed. Pass sectors as a comma-separated list and PTBot dispatches parallel cloud agents across all missing market×year combinations:
