@@ -4,7 +4,7 @@
   },
   "plan": {
     "title": "SQLite Deal Store",
-    "status": "running",
+    "status": "completed",
     "summary": "Add a SQLite persistence layer for deal candidates and qualified deals so pipeline runs are queryable and comparable across runs.",
     "motivation": "Currently deal data is written to flat JSON files per run with no way to query across runs, compare deal pipelines over time, or search historical results. A lightweight SQLite store enables cross-run queries without infrastructure overhead.",
     "deliverables": [
@@ -20,6 +20,7 @@
       "Database is optional; pipeline must still work without --db-path",
       "Existing tests must continue to pass unchanged",
       "Frozen pydantic models — do not modify existing model classes"
-    ]
+    ],
+    "updated": "2026-05-27T14:45:20Z"
   }
 }
