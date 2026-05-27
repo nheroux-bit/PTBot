@@ -406,9 +406,9 @@ def search_deals(
         params.append(max_date)
 
     where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
-    limit_clause = (
-        f"LIMIT {int(limit)}" if limit else ""
-    )  # int() guards against non-integer callers
+    # Use 'is not None' so limit=0 → LIMIT 0 (return 0 rows, standard SQL semantics).
+    # Plain `if limit` would treat 0 as falsy and silently return all rows.
+    limit_clause = f"LIMIT {int(limit)}" if limit is not None else ""
 
     sql = f"""
         SELECT
@@ -593,8 +593,10 @@ def get_similar_deals(
     for r in rows:
         run_sector = r.get("sector") or ""
         run_geo = r.get("geography") or ""
-        if (sector and sector.lower() in run_sector.lower()) or (
-            geography and geography.lower() in run_geo.lower()
+        # 'not X or X in ...' → include this row when the filter is absent (None);
+        # AND → both dimensions must pass, preventing an all-None call from returning nothing.
+        if (not sector or sector.lower() in run_sector.lower()) and (
+            not geography or geography.lower() in run_geo.lower()
         ):
             try:
                 results.append(row_to_deal_candidate(r))
