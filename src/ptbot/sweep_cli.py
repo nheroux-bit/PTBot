@@ -48,6 +48,13 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="ENV_ID",
         help="Oz cloud environment ID for --cloud runs (overrides config cloud_environment)",
     )
+    parser.add_argument(
+        "--max-active",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Abort if N or more cloud runs are already active (overrides config; default: 10)",
+    )
     return parser
 
 
@@ -65,14 +72,19 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     db_path_override = Path(args.db_path).expanduser() if args.db_path else None
 
-    run_sweep(
-        config,
-        dry_run=args.dry_run,
-        db_path_override=db_path_override,
-        cloud=args.cloud,
-        cloud_environment=args.environment,
-    )
-    return 0
+    try:
+        failures = run_sweep(
+            config,
+            dry_run=args.dry_run,
+            db_path_override=db_path_override,
+            cloud=args.cloud,
+            cloud_environment=args.environment,
+            max_active_cloud_runs=args.max_active,
+        )
+    except RuntimeError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    return 1 if failures else 0
 
 
 if __name__ == "__main__":

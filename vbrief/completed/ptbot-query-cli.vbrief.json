@@ -1,0 +1,29 @@
+{
+  "vBRIEFInfo": {
+    "version": "0.6",
+    "updated": "2026-05-27T19:23:10Z"
+  },
+  "plan": {
+    "title": "Database Query CLI (ptbot query)",
+    "status": "completed",
+    "summary": "Add a `ptbot query` subcommand (or thin wrapper) that lets users explore the SQLite deal database from the terminal without needing the Streamlit dashboard or a separate sqlite3 client.",
+    "motivation": "With the new SQLite persistence layer, users and operators need a quick way to list runs, search deals by target/acquirer/sector, inspect multiples, and export subsets. Currently the only options are the Streamlit dashboard or raw sqlite3. A lightweight CLI query interface makes the DB immediately useful for power users and scripting.",
+    "deliverables": [
+      "Extend src/ptbot/db.py with convenient query helpers: list_runs(), search_deals(filters), get_run_details(), export_deals()",
+      "New CLI entry or subcommand (ptbot query runs, ptbot query deals, ptbot query export) with useful flags (--sector, --geography, --since, --format json|table|csv)",
+      "Pretty table output using rich or tabulate (or stdlib if we stay minimal)",
+      "JSON output mode for scripting and piping into other tools",
+      "Updated README with query examples",
+      "New tests in tests/test_db.py or a dedicated test_query.py covering the new helpers and CLI surface",
+      "Passes task check"
+    ],
+    "constraints": [
+      "No new runtime dependencies (stay with stdlib + existing pydantic)",
+      "Must work when DB does not exist (graceful message)",
+      "Must respect --db-path the same way the rest of the tool does",
+      "Keep the interface simple; do not duplicate the full power of the Streamlit dashboard",
+      "Frozen models — do not change DealCandidate or ResearchParams"
+    ],
+    "updated": "2026-05-27T19:43:53Z"
+  }
+}

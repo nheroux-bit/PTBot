@@ -6,9 +6,7 @@ import json
 import sqlite3
 import subprocess
 import tempfile
-import time
 from pathlib import Path
-from typing import Any
 
 import pandas as pd
 import plotly.express as px
@@ -60,6 +58,7 @@ else:
 # Data loading
 # ---------------------------------------------------------------------------
 
+
 @st.cache_data(ttl=30)
 def load_deals(db_path_str: str) -> pd.DataFrame:
     """Load all deals joined with run params into a DataFrame."""
@@ -87,42 +86,17 @@ def load_deals(db_path_str: str) -> pd.DataFrame:
         conn,
     )
     conn.close()
-    df["multiples_list"] = df["multiples"].apply(
-        lambda x: json.loads(x) if x else []
-    )
-    df["source_list"] = df["source_urls"].apply(
-        lambda x: json.loads(x) if x else []
-    )
+    df["multiples_list"] = df["multiples"].apply(lambda x: json.loads(x) if x else [])
+    df["source_list"] = df["source_urls"].apply(lambda x: json.loads(x) if x else [])
     df["year"] = df["year"].astype(str)
     df["qualified"] = df["qualified"].astype(bool)
-    return df
-
-
-@st.cache_data(ttl=30)
-def load_runs(db_path_str: str) -> pd.DataFrame:
-    """Load all run records."""
-    conn = sqlite3.connect(db_path_str)
-    df = pd.read_sql_query(
-        """
-        SELECT
-            run_id,
-            json_extract(params, '$.sector')     AS sector,
-            json_extract(params, '$.geography')  AS geography,
-            json_extract(params, '$.start_date') AS start_date,
-            json_extract(params, '$.end_date')   AS end_date,
-            timestamp
-        FROM runs
-        ORDER BY timestamp DESC
-        """,
-        conn,
-    )
-    conn.close()
     return df
 
 
 # ---------------------------------------------------------------------------
 # Page: Dashboard
 # ---------------------------------------------------------------------------
+
 
 def page_dashboard(df: pd.DataFrame) -> None:
     st.title("📊 Dashboard")
@@ -150,14 +124,8 @@ def page_dashboard(df: pd.DataFrame) -> None:
     # Deals by sector
     with col_left:
         st.subheader("Deals by Sector")
-        sector_df = (
-            df.groupby(["sector", "qualified"])
-            .size()
-            .reset_index(name="count")
-        )
-        sector_df["label"] = sector_df["qualified"].map(
-            {True: "Qualified", False: "Unqualified"}
-        )
+        sector_df = df.groupby(["sector", "qualified"]).size().reset_index(name="count")
+        sector_df["label"] = sector_df["qualified"].map({True: "Qualified", False: "Unqualified"})
         fig = px.bar(
             sector_df,
             x="sector",
@@ -167,20 +135,14 @@ def page_dashboard(df: pd.DataFrame) -> None:
             barmode="stack",
             labels={"sector": "Sector", "count": "Deals", "label": ""},
         )
-        fig.update_layout(legend=dict(orientation="h", y=-0.2), margin=dict(t=10))
+        fig.update_layout(legend={"orientation": "h", "y": -0.2}, margin={"t": 10})
         st.plotly_chart(fig, use_container_width=True)
 
     # Deals by year
     with col_right:
         st.subheader("Deals by Year")
-        year_df = (
-            df.groupby(["year", "qualified"])
-            .size()
-            .reset_index(name="count")
-        )
-        year_df["label"] = year_df["qualified"].map(
-            {True: "Qualified", False: "Unqualified"}
-        )
+        year_df = df.groupby(["year", "qualified"]).size().reset_index(name="count")
+        year_df["label"] = year_df["qualified"].map({True: "Qualified", False: "Unqualified"})
         fig2 = px.line(
             year_df[year_df["label"] == "Qualified"],
             x="year",
@@ -189,7 +151,7 @@ def page_dashboard(df: pd.DataFrame) -> None:
             markers=True,
             labels={"year": "Year", "count": "Qualified Deals"},
         )
-        fig2.update_layout(margin=dict(t=10))
+        fig2.update_layout(margin={"t": 10})
         st.plotly_chart(fig2, use_container_width=True)
 
     st.divider()
@@ -210,6 +172,7 @@ def page_dashboard(df: pd.DataFrame) -> None:
 # ---------------------------------------------------------------------------
 # Page: Deal Browser
 # ---------------------------------------------------------------------------
+
 
 def page_deal_browser(df: pd.DataFrame) -> None:
     st.title("🔍 Deal Browser")
@@ -248,10 +211,9 @@ def page_deal_browser(df: pd.DataFrame) -> None:
     elif qual_filter == "Unqualified only":
         filtered = filtered[~filtered["qualified"]]
     if search:
-        mask = (
-            filtered["target"].str.contains(search, case=False, na=False)
-            | filtered["acquirer"].str.contains(search, case=False, na=False)
-        )
+        mask = filtered["target"].str.contains(search, case=False, na=False) | filtered[
+            "acquirer"
+        ].str.contains(search, case=False, na=False)
         filtered = filtered[mask]
 
     st.caption(f"Showing {len(filtered):,} of {len(df):,} deals")
@@ -270,8 +232,8 @@ def page_deal_browser(df: pd.DataFrame) -> None:
     )
 
     # Detail panel for selected row
-    if selected_rows and selected_rows.selection.rows:
-        idx = selected_rows.selection.rows[0]
+    if selected_rows and selected_rows.selection.rows:  # type: ignore[attr-defined]
+        idx = selected_rows.selection.rows[0]  # type: ignore[attr-defined]
         row = filtered.iloc[idx]
         st.divider()
         st.subheader(f"📋 {row['target']} — acquired by {row['acquirer']}")
@@ -299,6 +261,7 @@ def page_deal_browser(df: pd.DataFrame) -> None:
 # Page: Request Industries
 # ---------------------------------------------------------------------------
 
+
 def page_request_industries() -> None:
     st.title("🚀 Request Industries")
     st.markdown(
@@ -320,13 +283,9 @@ def page_request_industries() -> None:
 
         col1, col2 = st.columns(2)
         with col1:
-            years_back = st.number_input(
-                "Years back", min_value=1, max_value=20, value=10
-            )
+            years_back = st.number_input("Years back", min_value=1, max_value=20, value=10)
         with col2:
-            max_workers = st.number_input(
-                "Parallel runs", min_value=1, max_value=5, value=3
-            )
+            max_workers = st.number_input("Parallel runs", min_value=1, max_value=5, value=3)
 
         st.subheader("Execution")
         use_cloud = st.toggle("Use cloud agents (oz agent run-cloud)", value=True)
@@ -348,11 +307,17 @@ def page_request_industries() -> None:
         st.error("Enter at least one sector.")
         return
 
-    # Build TOML config
+    # Build TOML config (escape user input to avoid malformed TOML)
+    def _toml_str(v: str) -> str:
+        return v.replace("\\", "\\\\").replace('"', '\\"')
+
     markets_block = "\n".join(
-        f'[[markets]]\nsector = "{s}"\ngeography = "{geography}"\n'
+        f'[[markets]]\nsector = "{_toml_str(s)}"\ngeography = "{_toml_str(geography)}"\n'
         for s in sectors
     )
+
+    cloud_line = f'cloud_environment = "{_toml_str(environment_id)}"' if environment_id else ""
+
     toml_content = f"""# PTBot sweep — generated from dashboard
 [sweep]
 years_back = {years_back}
@@ -361,7 +326,7 @@ output_base_dir = "./precedent-txn-output"
 min_multiples = 1
 timeout = 900
 max_workers = {max_workers}
-{"cloud_environment = \"" + environment_id + "\"" if environment_id else ""}
+{cloud_line}
 
 {markets_block}"""
 
@@ -404,43 +369,14 @@ max_workers = {max_workers}
             else:
                 st.error(f"Sweep exited with code {proc.returncode}.")
         except FileNotFoundError:
-            st.error(
-                "`ptbot-sweep` not found. Make sure PTBot is installed: "
-                "`pip install -e .`"
-            )
-
-
-# ---------------------------------------------------------------------------
-# Router
-# ---------------------------------------------------------------------------
-
-if not db_path.exists():
-    if page != "🚀 Request Industries":
-        st.warning(
-            f"Database not found at `{db_path}`. "
-            "Use **Request Industries** to run your first sweep."
-        )
-
-df_deals: pd.DataFrame = pd.DataFrame()
-if db_path.exists():
-    try:
-        df_deals = load_deals(str(db_path))
-    except Exception as exc:
-        st.error(f"Failed to load database: {exc}")
-
-if page == "📊 Dashboard":
-    page_dashboard(df_deals)
-elif page == "🔍 Deal Browser":
-    page_deal_browser(df_deals)
-elif page == "🚀 Request Industries":
-    page_request_industries()
-elif page == "☁️ Cloud Control":
-    page_cloud_control()
+            st.error("`ptbot-sweep` not found. Make sure PTBot is installed: " "`pip install -e .`")
 
 
 # ---------------------------------------------------------------------------
 # Cloud Control Plane page (cloud-control-001)
 # ---------------------------------------------------------------------------
+# Moved here so it is defined before the router calls it (Streamlit re-executes
+# the whole script top-to-bottom on every interaction).
 
 
 def page_cloud_control() -> None:
@@ -457,7 +393,6 @@ def page_cloud_control() -> None:
         "(the 2026-05 firedrill scenario). Use to observe and terminate orphan swarms."
     )
 
-    db_str = str(db_path)
     try:
         conn = _db.open_db(db_path)
         runs = _db.list_cloud_runs(conn, active_only=False)
@@ -467,7 +402,10 @@ def page_cloud_control() -> None:
         return
 
     if not runs:
-        st.info("No cloud agent runs recorded yet. Launch a sweep with --cloud or via the Request Industries form.")
+        st.info(
+            "No cloud agent runs recorded yet. "
+            "Launch a sweep with --cloud or via the Request Industries form."
+        )
         return
 
     active = [r for r in runs if r.get("status") in ("dispatched", "running")]
@@ -480,7 +418,9 @@ def page_cloud_control() -> None:
                 cols = st.columns([3, 2, 2, 1])
                 with cols[0]:
                     st.code(r["oz_run_id"], language=None)
-                    st.caption(f"parent: {r.get('parent','')} | env: {r.get('environment','(default)')}")
+                    st.caption(
+                        f"parent: {r.get('parent','')} | env: {r.get('environment','(default)')}"
+                    )
                 with cols[1]:
                     st.write(f"**status:** `{r['status']}`")
                     if r.get("dispatched_at"):
@@ -505,7 +445,9 @@ def page_cloud_control() -> None:
                                 except Exception as e:
                                     st.error(f"Registry update failed: {e}")
                             else:
-                                st.warning("Use force below if the oz CLI surface is not yet available.")
+                                st.warning(
+                                    "Use force below if the oz CLI surface is not yet available."
+                                )
                     if st.checkbox("force mark", key=f"force_{r['oz_run_id']}"):
                         pass
     else:
@@ -513,9 +455,43 @@ def page_cloud_control() -> None:
 
     with st.expander(f"Terminal / Historical ({len(terminal)})"):
         for r in terminal[:20]:  # bound
+            cost_str = (
+                f"cost ${round(r['cost_estimate_usd'], 2)}"
+                if r.get("cost_estimate_usd") is not None
+                else ""
+            )
             st.write(
-                f"{r['oz_run_id'][:16]}... | {r['status']} | {r.get('dispatched_at','')[:16]} "
-                f"{'cost $' + str(round(r['cost_estimate_usd'],2)) if r.get('cost_estimate_usd') else ''}"
+                f"{r['oz_run_id'][:16]}... | {r['status']} | "
+                f"{r.get('dispatched_at','')[:16]} {cost_str}"
             )
 
-    st.caption("Registry is the source of truth for cloud work. All --cloud dispatches (sweep + dashboard) are recorded here via the runners layer.")
+    st.caption(
+        "Registry is the source of truth for cloud work. "
+        "All --cloud dispatches (sweep + dashboard) are recorded here via the runners layer."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Router
+# ---------------------------------------------------------------------------
+
+if not db_path.exists() and page != "🚀 Request Industries":
+    st.warning(
+        f"Database not found at `{db_path}`. " "Use **Request Industries** to run your first sweep."
+    )
+
+df_deals: pd.DataFrame = pd.DataFrame()
+if db_path.exists():
+    try:
+        df_deals = load_deals(str(db_path))
+    except Exception as exc:
+        st.error(f"Failed to load database: {exc}")
+
+if page == "📊 Dashboard":
+    page_dashboard(df_deals)
+elif page == "🔍 Deal Browser":
+    page_deal_browser(df_deals)
+elif page == "🚀 Request Industries":
+    page_request_industries()
+elif page == "☁️ Cloud Control":
+    page_cloud_control()

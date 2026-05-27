@@ -1,0 +1,29 @@
+{
+  "vBRIEFInfo": {
+    "version": "0.6",
+    "updated": "2026-05-27T19:57:42Z"
+  },
+  "plan": {
+    "title": "Cloud agent safeguards: kill-all, WIP cap, dispatch watchdog",
+    "status": "completed",
+    "summary": "Prevent rogue cloud agent firestorms and make recovery fast. Three complementary safeguards: a nuclear `ptbot cloud kill-all` command, a configurable WIP cap that blocks new dispatches when too many agents are already running, and a lightweight timeout watchdog that auto-kills overdue runs.",
+    "motivation": "A 2026-05-27 firedrill showed cloud agents going rogue and becoming unkillable: `oz agent kill` failed on all 5 probed CLI surfaces, sub-agents spawned inside runs were unregistered, and the sweep had no dispatch ceiling. Recovery required manual intervention in the Oz dashboard. The three safeguards here close the three failure modes independently so no single point can produce an unrecoverable situation.",
+    "deliverables": [
+      "`ptbot cloud kill-all [--db-path] [--dry-run]` — kills every dispatched/running entry in the registry in one command. Calls kill_cloud_run() for each active run, marks all as revoked. --dry-run prints what would be killed without acting.",
+      "WIP cap in sweep:auto dispatch — before run_sweep() is called, count active cloud_runs entries (status dispatched or running). If count >= --max-active (default: 10, configurable via flag), abort with a clear message showing what is running. Prevents a sweep from stacking on a prior incomplete run.",
+      "Timeout watchdog thread — optional background thread launched inside run_sweep() when cloud=True. Polls the registry every 60s; kills any run whose dispatched_at + (timeout * 1.5) has elapsed without a terminal status. Fires kill_cloud_run() + marks revoked. Stops cleanly when the sweep completes.",
+      "New `--max-active N` flag on `ptbot sweep:auto` (and `ptbot-sweep` via SweepSettings.max_active_cloud_runs field)",
+      "Tests covering: kill-all dry-run, kill-all with active runs, kill-all empty registry, WIP cap blocks dispatch, WIP cap passes when under limit, watchdog kills overdue run",
+      "CHANGELOG entry and README note on the three safeguards",
+      "Passes task check"
+    ],
+    "constraints": [
+      "No new runtime dependencies",
+      "kill-all must be non-destructive under --dry-run",
+      "WIP cap check must read the registry synchronously before any dispatch; the check and the first dispatch must happen in the same function scope so no TOCTOU window",
+      "Watchdog thread is daemon=True so it never blocks process exit if the sweep finishes or is Ctrl-C'd",
+      "Frozen models — do not change DealCandidate or ResearchParams"
+    ],
+    "updated": "2026-05-27T21:59:33Z"
+  }
+}
