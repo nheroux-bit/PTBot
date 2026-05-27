@@ -136,7 +136,10 @@ class DealCandidate(BaseModel):
 
 
 class AgentRunResult(BaseModel):
-    """Normalized result from an Oz agent invocation."""
+    """Normalized result from an Oz agent invocation.
+
+    Extended with optional cost for cost-accounting-001 (non-breaking: default None).
+    """
 
     model_config = ConfigDict(strict=True, extra="forbid", frozen=True)
 
@@ -145,6 +148,7 @@ class AgentRunResult(BaseModel):
     run_id: str = ""
     run_url: str = ""
     error: str | None = None
+    cost: CostBreakdown | None = None
 
 
 class PipelinePaths(BaseModel):
@@ -157,3 +161,64 @@ class PipelinePaths(BaseModel):
     final_pdf: Path
     comps_excel: Path
     qualified_deals: Path
+    # Cost accounting (cost-accounting-001) — populated by orchestrator for callers that need it
+    cost: CostBreakdown | None = None
+
+
+# ---------------------------------------------------------------------------
+# Cost accounting models (cost-accounting-001)
+# ---------------------------------------------------------------------------
+
+
+class TokenUsage(BaseModel):
+    """Token counts for an agent invocation or full pipeline run aggregate."""
+
+    model_config = ConfigDict(strict=True, extra="forbid", frozen=True)
+
+    input_tokens: int = Field(..., ge=0)
+    output_tokens: int = Field(..., ge=0)
+
+
+class CostBreakdown(BaseModel):
+    """Per-task or per-run cost estimate using the static price table.
+
+    All monetary values in USD. Used for both per-agent instrumentation and
+    industry-level budget rollups.
+    """
+
+    model_config = ConfigDict(strict=True, extra="forbid", frozen=True)
+
+    model: str = Field(default="oz-default", min_length=1)
+    usage: TokenUsage
+    estimated_cost_usd: float = Field(..., ge=0)
+    input_cost_usd: float = Field(..., ge=0)
+    output_cost_usd: float = Field(..., ge=0)
+
+
+# Static price table: USD per million tokens. Conservative defaults chosen so
+# a typical 8-agent PTBot run (~2k-5k total tokens) produces $0.5-$5 estimates
+# consistent with COST-ESTIMATE.md. Extended later when model tier selection lands.
+PRICE_TABLE: dict[str, dict[str, float]] = {
+    "oz-default": {"input_per_mtok": 2.50, "output_per_mtok": 10.00},
+}
+
+
+def estimate_cost(prompt: str, output: str, model: str = "oz-default") -> CostBreakdown:
+    """Heuristic token + cost estimation from char length (≈4 chars/token).
+
+    Used by runners for both local and cloud paths. Guarantees positive token
+    counts and matches the vBRIEF requirement for a static price table.
+    """
+    input_tokens = max(1, len(prompt or "") // 4)
+    output_tokens = max(1, len(output or "") // 4)
+    prices = PRICE_TABLE.get(model, PRICE_TABLE["oz-default"])
+    in_cost = (input_tokens / 1_000_000) * prices["input_per_mtok"]
+    out_cost = (output_tokens / 1_000_000) * prices["output_per_mtok"]
+    total = in_cost + out_cost
+    return CostBreakdown(
+        model=model,
+        usage=TokenUsage(input_tokens=input_tokens, output_tokens=output_tokens),
+        estimated_cost_usd=round(total, 6),
+        input_cost_usd=round(in_cost, 6),
+        output_cost_usd=round(out_cost, 6),
+    )

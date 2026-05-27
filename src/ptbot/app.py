@@ -6,9 +6,7 @@ import json
 import sqlite3
 import subprocess
 import tempfile
-import time
 from pathlib import Path
-from typing import Any
 
 import pandas as pd
 import plotly.express as px
@@ -60,6 +58,7 @@ else:
 # Data loading
 # ---------------------------------------------------------------------------
 
+
 @st.cache_data(ttl=30)
 def load_deals(db_path_str: str) -> pd.DataFrame:
     """Load all deals joined with run params into a DataFrame."""
@@ -87,12 +86,8 @@ def load_deals(db_path_str: str) -> pd.DataFrame:
         conn,
     )
     conn.close()
-    df["multiples_list"] = df["multiples"].apply(
-        lambda x: json.loads(x) if x else []
-    )
-    df["source_list"] = df["source_urls"].apply(
-        lambda x: json.loads(x) if x else []
-    )
+    df["multiples_list"] = df["multiples"].apply(lambda x: json.loads(x) if x else [])
+    df["source_list"] = df["source_urls"].apply(lambda x: json.loads(x) if x else [])
     df["year"] = df["year"].astype(str)
     df["qualified"] = df["qualified"].astype(bool)
     return df
@@ -110,6 +105,10 @@ def load_runs(db_path_str: str) -> pd.DataFrame:
             json_extract(params, '$.geography')  AS geography,
             json_extract(params, '$.start_date') AS start_date,
             json_extract(params, '$.end_date')   AS end_date,
+            input_tokens,
+            output_tokens,
+            estimated_cost_usd,
+            COALESCE(cost_model, 'oz-default') AS cost_model,
             timestamp
         FROM runs
         ORDER BY timestamp DESC
@@ -117,12 +116,17 @@ def load_runs(db_path_str: str) -> pd.DataFrame:
         conn,
     )
     conn.close()
+    # Ensure numeric for cost math even on old schema rows
+    for col in ("input_tokens", "output_tokens", "estimated_cost_usd"):
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
     return df
 
 
 # ---------------------------------------------------------------------------
 # Page: Dashboard
 # ---------------------------------------------------------------------------
+
 
 def page_dashboard(df: pd.DataFrame) -> None:
     st.title("📊 Dashboard")
@@ -150,14 +154,8 @@ def page_dashboard(df: pd.DataFrame) -> None:
     # Deals by sector
     with col_left:
         st.subheader("Deals by Sector")
-        sector_df = (
-            df.groupby(["sector", "qualified"])
-            .size()
-            .reset_index(name="count")
-        )
-        sector_df["label"] = sector_df["qualified"].map(
-            {True: "Qualified", False: "Unqualified"}
-        )
+        sector_df = df.groupby(["sector", "qualified"]).size().reset_index(name="count")
+        sector_df["label"] = sector_df["qualified"].map({True: "Qualified", False: "Unqualified"})
         fig = px.bar(
             sector_df,
             x="sector",
@@ -167,20 +165,14 @@ def page_dashboard(df: pd.DataFrame) -> None:
             barmode="stack",
             labels={"sector": "Sector", "count": "Deals", "label": ""},
         )
-        fig.update_layout(legend=dict(orientation="h", y=-0.2), margin=dict(t=10))
+        fig.update_layout(legend={"orientation": "h", "y": -0.2}, margin={"t": 10})
         st.plotly_chart(fig, use_container_width=True)
 
     # Deals by year
     with col_right:
         st.subheader("Deals by Year")
-        year_df = (
-            df.groupby(["year", "qualified"])
-            .size()
-            .reset_index(name="count")
-        )
-        year_df["label"] = year_df["qualified"].map(
-            {True: "Qualified", False: "Unqualified"}
-        )
+        year_df = df.groupby(["year", "qualified"]).size().reset_index(name="count")
+        year_df["label"] = year_df["qualified"].map({True: "Qualified", False: "Unqualified"})
         fig2 = px.line(
             year_df[year_df["label"] == "Qualified"],
             x="year",
@@ -189,7 +181,7 @@ def page_dashboard(df: pd.DataFrame) -> None:
             markers=True,
             labels={"year": "Year", "count": "Qualified Deals"},
         )
-        fig2.update_layout(margin=dict(t=10))
+        fig2.update_layout(margin={"t": 10})
         st.plotly_chart(fig2, use_container_width=True)
 
     st.divider()
@@ -206,10 +198,52 @@ def page_dashboard(df: pd.DataFrame) -> None:
     qual_table.columns = ["Sector", "Total Deals", "Qualified", "Rate (%)"]
     st.dataframe(qual_table, use_container_width=True, hide_index=True)
 
+    # --- Basic cost surface per vBRIEF ca-4 (non-breaking addition) ---
+    st.divider()
+    st.subheader("💰 Cost & Per-Industry Budget (cost-accounting-001)")
+    try:
+        runs_df = load_runs(str(db_path))  # cached (db_path from module sidebar)
+    except Exception:
+        runs_df = pd.DataFrame()
+    if runs_df.empty or "estimated_cost_usd" not in runs_df.columns:
+        st.caption("No cost data yet (runs before cost tracking or empty DB).")
+    else:
+        total_cost = float(runs_df["estimated_cost_usd"].sum())
+        avg_cost = float(runs_df["estimated_cost_usd"].mean()) if len(runs_df) else 0.0
+        run_count = len(runs_df)
+        # Group by industry (sector+geo)
+        runs_df["industry"] = runs_df["sector"].fillna("") + " / " + runs_df["geography"].fillna("")
+        ind = (
+            runs_df.groupby("industry")
+            .agg(cost=("estimated_cost_usd", "sum"), runs=("run_id", "count"))
+            .reset_index()
+            .sort_values("cost", ascending=False)
+        )
+        over_budget = ind[ind["cost"] > 50.0]
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Total Cost (all runs)", f"${total_cost:,.2f}")
+        c2.metric("Runs Tracked", f"{run_count:,}")
+        c3.metric("Avg Cost / Run", f"${avg_cost:,.2f}")
+        c4.metric("Industries >$50", len(over_budget), delta_color="inverse")
+
+        st.caption("Target: $50 per industry (sector + geography). Soft warnings in CLI/sweep.")
+        if not ind.empty:
+            st.dataframe(
+                ind.assign(over=lambda x: x["cost"] > 50).rename(
+                    columns={"industry": "Industry", "cost": "Cost (USD)", "runs": "Runs"}
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
+        if not over_budget.empty:
+            st.warning(f"{len(over_budget)} industry(ies) over the $50 soft target.")
+
 
 # ---------------------------------------------------------------------------
 # Page: Deal Browser
 # ---------------------------------------------------------------------------
+
 
 def page_deal_browser(df: pd.DataFrame) -> None:
     st.title("🔍 Deal Browser")
@@ -248,10 +282,9 @@ def page_deal_browser(df: pd.DataFrame) -> None:
     elif qual_filter == "Unqualified only":
         filtered = filtered[~filtered["qualified"]]
     if search:
-        mask = (
-            filtered["target"].str.contains(search, case=False, na=False)
-            | filtered["acquirer"].str.contains(search, case=False, na=False)
-        )
+        mask = filtered["target"].str.contains(search, case=False, na=False) | filtered[
+            "acquirer"
+        ].str.contains(search, case=False, na=False)
         filtered = filtered[mask]
 
     st.caption(f"Showing {len(filtered):,} of {len(df):,} deals")
@@ -299,6 +332,7 @@ def page_deal_browser(df: pd.DataFrame) -> None:
 # Page: Request Industries
 # ---------------------------------------------------------------------------
 
+
 def page_request_industries() -> None:
     st.title("🚀 Request Industries")
     st.markdown(
@@ -320,13 +354,9 @@ def page_request_industries() -> None:
 
         col1, col2 = st.columns(2)
         with col1:
-            years_back = st.number_input(
-                "Years back", min_value=1, max_value=20, value=10
-            )
+            years_back = st.number_input("Years back", min_value=1, max_value=20, value=10)
         with col2:
-            max_workers = st.number_input(
-                "Parallel runs", min_value=1, max_value=5, value=3
-            )
+            max_workers = st.number_input("Parallel runs", min_value=1, max_value=5, value=3)
 
         st.subheader("Execution")
         use_cloud = st.toggle("Use cloud agents (oz agent run-cloud)", value=True)
@@ -348,11 +378,11 @@ def page_request_industries() -> None:
         st.error("Enter at least one sector.")
         return
 
-    # Build TOML config
+    # Build TOML config (cloud line computed outside f-string to be Python 3.11 + black safe)
     markets_block = "\n".join(
-        f'[[markets]]\nsector = "{s}"\ngeography = "{geography}"\n'
-        for s in sectors
+        f'[[markets]]\nsector = "{s}"\ngeography = "{geography}"\n' for s in sectors
     )
+    cloud_line = f'cloud_environment = "{environment_id}"' if environment_id else ""
     toml_content = f"""# PTBot sweep — generated from dashboard
 [sweep]
 years_back = {years_back}
@@ -361,7 +391,7 @@ output_base_dir = "./precedent-txn-output"
 min_multiples = 1
 timeout = 900
 max_workers = {max_workers}
-{"cloud_environment = \"" + environment_id + "\"" if environment_id else ""}
+{cloud_line}
 
 {markets_block}"""
 
@@ -404,22 +434,17 @@ max_workers = {max_workers}
             else:
                 st.error(f"Sweep exited with code {proc.returncode}.")
         except FileNotFoundError:
-            st.error(
-                "`ptbot-sweep` not found. Make sure PTBot is installed: "
-                "`pip install -e .`"
-            )
+            st.error("`ptbot-sweep` not found. Make sure PTBot is installed: " "`pip install -e .`")
 
 
 # ---------------------------------------------------------------------------
 # Router
 # ---------------------------------------------------------------------------
 
-if not db_path.exists():
-    if page != "🚀 Request Industries":
-        st.warning(
-            f"Database not found at `{db_path}`. "
-            "Use **Request Industries** to run your first sweep."
-        )
+if not db_path.exists() and page != "🚀 Request Industries":
+    st.warning(
+        f"Database not found at `{db_path}`. " "Use **Request Industries** to run your first sweep."
+    )
 
 df_deals: pd.DataFrame = pd.DataFrame()
 if db_path.exists():

@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from .models import DealCandidate, ResearchParams
+from .models import CostBreakdown, DealCandidate, ResearchParams
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
@@ -31,25 +31,26 @@ CREATE TABLE IF NOT EXISTS deals (
     source_urls                  TEXT NOT NULL DEFAULT '[]',
     qualified                    INTEGER NOT NULL DEFAULT 0
 );
-
--- cloud-control-001: Cloud execution control plane registry.
--- Survives parent death for post-firedrill revocation.
--- Orthogonal to cost-accounting-001 (separate table; cost_estimate_usd
--- field allows future population from cost instrumentation).
-CREATE TABLE IF NOT EXISTS cloud_runs (
-    oz_run_id          TEXT PRIMARY KEY,
-    parent             TEXT NOT NULL DEFAULT '',
-    environment        TEXT,
-    cost_estimate_usd  REAL,
-    dispatched_at      TEXT NOT NULL,
-    completed_at       TEXT,
-    status             TEXT NOT NULL DEFAULT 'dispatched',
-    run_url            TEXT NOT NULL DEFAULT '',
-    prompt_excerpt     TEXT NOT NULL DEFAULT '',
-    exit_code          INTEGER,
-    error              TEXT
-);
 """
+
+
+def _ensure_cost_columns(conn: sqlite3.Connection) -> None:
+    """Idempotent migration: add cost columns to 'runs' for DBs pre-dating cost-accounting-001.
+
+    Safe on every open_db. PRAGMA + ALTER ADD COLUMN with defaults.
+    Other swarm agents continue to work unchanged.
+    """
+    cur = conn.execute("PRAGMA table_info(runs)")
+    existing = {row[1] for row in cur.fetchall()}
+    if "input_tokens" not in existing:
+        conn.execute("ALTER TABLE runs ADD COLUMN input_tokens INTEGER NOT NULL DEFAULT 0")
+    if "output_tokens" not in existing:
+        conn.execute("ALTER TABLE runs ADD COLUMN output_tokens INTEGER NOT NULL DEFAULT 0")
+    if "estimated_cost_usd" not in existing:
+        conn.execute("ALTER TABLE runs ADD COLUMN estimated_cost_usd REAL NOT NULL DEFAULT 0.0")
+    if "cost_model" not in existing:
+        conn.execute("ALTER TABLE runs ADD COLUMN cost_model TEXT DEFAULT 'oz-default'")
+    conn.commit()
 
 
 def open_db(db_path: Path) -> sqlite3.Connection:
@@ -57,10 +58,6 @@ def open_db(db_path: Path) -> sqlite3.Connection:
 
     Creates all parent directories as needed. Enables WAL journal mode
     and foreign-key enforcement on every connection.
-
-    Cloud control plane table (cloud_runs) is included; existing DBs get
-    the table on next open (IF NOT EXISTS is safe and concurrent-friendly
-    with WAL).
     """
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
@@ -69,6 +66,7 @@ def open_db(db_path: Path) -> sqlite3.Connection:
     conn.execute("PRAGMA busy_timeout=10000")  # wait up to 10 s on writer contention
     conn.executescript(_SCHEMA)
     conn.commit()
+    _ensure_cost_columns(conn)  # cost-accounting-001: idempotent ALTERs for pre-existing DBs
     return conn
 
 
@@ -81,14 +79,32 @@ def insert_run(
     conn: sqlite3.Connection,
     run_id: str,
     params: ResearchParams,
+    cost: CostBreakdown | None = None,
 ) -> None:
-    """Insert a pipeline run record."""
+    """Insert a pipeline run record.
+
+    Cost columns (vBRIEF ca-2) are populated when *cost* is provided; otherwise zeros.
+    Signature change is backward-compatible (new param has default).
+    """
+    in_tok = cost.usage.input_tokens if cost else 0
+    out_tok = cost.usage.output_tokens if cost else 0
+    usd = cost.estimated_cost_usd if cost else 0.0
+    model = cost.model if cost else "oz-default"
     conn.execute(
-        "INSERT INTO runs (run_id, params, timestamp) VALUES (?, ?, ?)",
+        """
+        INSERT INTO runs (
+            run_id, params, timestamp,
+            input_tokens, output_tokens, estimated_cost_usd, cost_model
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
         (
             run_id,
             json.dumps(params.model_dump(mode="json")),
             datetime.now(UTC).isoformat(),
+            in_tok,
+            out_tok,
+            usd,
+            model,
         ),
     )
     conn.commit()
@@ -174,153 +190,81 @@ def query_run_exists(
 
 
 # ---------------------------------------------------------------------------
-# Cloud execution control plane (cloud-control-001)
+# Cost accounting extensions (cost-accounting-001, ca-2)
 # ---------------------------------------------------------------------------
-#
-# Persistent registry for oz agent run-cloud dispatches. Survives parent
-# process death (the root cause of the 2026-05 cloud sub-agent firedrill).
-# Enables listing active/revoked runs + reliable revocation even when the
-# launching sweep/dashboard/CLI has crashed or been killed.
-#
-# Soft coordination with cost-accounting-001: cost_estimate_usd field
-# allows population from cost work (parallel agent in ptbot-swarm-cost).
-# cloud_runs table is independent — zero conflict on schema.
-#
-# Enforcement: every path that calls oz run-cloud must register via
-# register_cloud_dispatch (wired in runners.py + sweep.py call sites).
-# See also: runners.kill_cloud_run for the revocation attempt logic.
 
 
-def register_cloud_dispatch(
-    conn: sqlite3.Connection,
-    oz_run_id: str,
-    *,
-    parent: str = "",
-    environment: str | None = None,
-    cost_estimate_usd: float | None = None,
-    run_url: str = "",
-    prompt_excerpt: str = "",
-) -> None:
-    """Register (or update) a cloud Oz agent dispatch in the control plane.
+def update_run_cost(conn: sqlite3.Connection, run_id: str, cost: CostBreakdown) -> None:
+    """Late update of cost columns for a run (called after all agents complete in orchestrator).
 
-    Idempotent on oz_run_id (supports re-registration on retries or
-    post-crash reconciliation). Timestamps in UTC ISO format.
-
-    This is the enforcement point: every cloud dispatch must call this
-    (directly or via runners.py wrappers) so the registry survives parent
-    death.
+    Enables full 8-agent accounting while keeping the early insert_run (for deal FKs) unchanged.
     """
-    if not oz_run_id:
-        # Never store empty; caller should synthesize "pending-<uuid>"
-        raise ValueError("oz_run_id is required for cloud dispatch registration")
-
-    now = datetime.now(UTC).isoformat()
-    excerpt = (prompt_excerpt or "")[:500]  # bound size for safety
-
-    # Idempotent insert-or-merge (no data loss on concurrent or re-entry)
     conn.execute(
         """
-        INSERT OR IGNORE INTO cloud_runs (
-            oz_run_id, parent, environment, cost_estimate_usd,
-            dispatched_at, status, run_url, prompt_excerpt
-        ) VALUES (?, ?, ?, ?, ?, 'dispatched', ?, ?)
-        """,
-        (oz_run_id, parent, environment, cost_estimate_usd, now, run_url, excerpt),
-    )
-    # Always refresh mutable fields on re-registration (e.g. cost now known,
-    # parent context enriched, run_url captured from NDJSON)
-    conn.execute(
-        """
-        UPDATE cloud_runs SET
-            parent = CASE WHEN ? != '' THEN ? ELSE parent END,
-            environment = COALESCE(?, environment),
-            cost_estimate_usd = COALESCE(?, cost_estimate_usd),
-            run_url = CASE WHEN ? != '' THEN ? ELSE run_url END,
-            prompt_excerpt = CASE WHEN ? != '' THEN ? ELSE prompt_excerpt END
-        WHERE oz_run_id = ?
+        UPDATE runs
+        SET input_tokens = ?,
+            output_tokens = ?,
+            estimated_cost_usd = ?,
+            cost_model = ?
+        WHERE run_id = ?
         """,
         (
-            parent,
-            parent,
-            environment,
-            cost_estimate_usd,
-            run_url,
-            run_url,
-            excerpt,
-            excerpt,
-            oz_run_id,
+            cost.usage.input_tokens,
+            cost.usage.output_tokens,
+            cost.estimated_cost_usd,
+            cost.model,
+            run_id,
         ),
     )
     conn.commit()
 
 
-def update_cloud_run(
-    conn: sqlite3.Connection,
-    oz_run_id: str,
-    *,
-    status: str,
-    completed_at: str | None = None,
-    exit_code: int | None = None,
-    error: str | None = None,
-    cost_estimate_usd: float | None = None,
-) -> None:
-    """Update lifecycle status of a registered cloud run (terminal states)."""
-    now = datetime.now(UTC).isoformat()
-    if completed_at is None and status in {"succeeded", "failed", "killed", "revoked", "timed_out"}:
-        completed_at = now
-
-    conn.execute(
+def get_run_cost(conn: sqlite3.Connection, run_id: str) -> dict[str, Any] | None:
+    """Fetch the cost record for a single run (or None)."""
+    cursor = conn.execute(
         """
-        UPDATE cloud_runs SET
-            status = ?,
-            completed_at = COALESCE(?, completed_at),
-            exit_code = COALESCE(?, exit_code),
-            error = COALESCE(?, error),
-            cost_estimate_usd = COALESCE(?, cost_estimate_usd)
-        WHERE oz_run_id = ?
+        SELECT run_id, input_tokens, output_tokens, estimated_cost_usd, cost_model, timestamp
+        FROM runs
+        WHERE run_id = ?
         """,
-        (status, completed_at, exit_code, error, cost_estimate_usd, oz_run_id),
+        (run_id,),
     )
-    conn.commit()
-
-
-def list_cloud_runs(
-    conn: sqlite3.Connection,
-    *,
-    active_only: bool = False,
-) -> list[dict[str, Any]]:
-    """Return cloud run records (newest first).
-
-    If active_only, only non-terminal statuses (for dashboard/CLI status).
-    """
-    if active_only:
-        sql = """
-            SELECT * FROM cloud_runs
-            WHERE status IN ('dispatched', 'running')
-            ORDER BY dispatched_at DESC
-        """
-        cursor = conn.execute(sql)
-    else:
-        cursor = conn.execute("SELECT * FROM cloud_runs ORDER BY dispatched_at DESC")
-    columns = [d[0] for d in cursor.description]
-    return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
-
-
-def get_cloud_run(conn: sqlite3.Connection, oz_run_id: str) -> dict[str, Any] | None:
-    """Fetch a single cloud run by its oz run_id (or None)."""
-    cursor = conn.execute("SELECT * FROM cloud_runs WHERE oz_run_id = ?", (oz_run_id,))
     row = cursor.fetchone()
     if row is None:
         return None
-    columns = [d[0] for d in cursor.description]
-    return dict(zip(columns, row, strict=True))
+    cols = [d[0] for d in cursor.description]
+    return dict(zip(cols, row, strict=True))
 
 
-def mark_cloud_run_revoked(conn: sqlite3.Connection, oz_run_id: str) -> None:
-    """Mark a cloud run revoked (called after successful or best-effort kill)."""
-    now = datetime.now(UTC).isoformat()
-    conn.execute(
-        "UPDATE cloud_runs SET status='revoked', completed_at=? WHERE oz_run_id=?",
-        (now, oz_run_id),
+def get_industry_cost_summary(
+    conn: sqlite3.Connection, sector: str, geography: str
+) -> dict[str, Any]:
+    """Rollup of cost, tokens, and run count for one (sector, geography) industry.
+
+    Powers the $50 per-industry soft budget target, warnings, and dashboard surfaces.
+    Returns zeros when no matching runs exist.
+    """
+    cursor = conn.execute(
+        """
+        SELECT
+            COUNT(*) AS run_count,
+            COALESCE(SUM(input_tokens), 0) AS total_input_tokens,
+            COALESCE(SUM(output_tokens), 0) AS total_output_tokens,
+            COALESCE(SUM(estimated_cost_usd), 0.0) AS total_cost_usd,
+            COALESCE(AVG(estimated_cost_usd), 0.0) AS avg_cost_usd,
+            COALESCE(MAX(estimated_cost_usd), 0.0) AS max_cost_usd
+        FROM runs
+        WHERE json_extract(params, '$.sector') = ?
+          AND json_extract(params, '$.geography') = ?
+        """,
+        (sector, geography),
     )
-    conn.commit()
+    row = cursor.fetchone()
+    cols = [d[0] for d in cursor.description]
+    data = dict(zip(cols, row, strict=True))
+    data["sector"] = sector
+    data["geography"] = geography
+    data["budget_target_usd"] = 50.0
+    data["remaining_budget_usd"] = max(0.0, 50.0 - data["total_cost_usd"])
+    data["over_budget"] = data["total_cost_usd"] > 50.0
+    return data

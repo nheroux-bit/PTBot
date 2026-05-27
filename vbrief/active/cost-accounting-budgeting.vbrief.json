@@ -1,0 +1,76 @@
+{
+  "vBRIEFInfo": {
+    "version": "0.6"
+  },
+  "plan": {
+    "id": "cost-accounting-001",
+    "title": "PTBot Cost Accounting & Per-Industry Budgeting",
+    "status": "running",
+    "kind": "story",
+    "summary": "Add first-class cost tracking and budgeting so every PTBot run (and every industry sweep) has visible, persisted token and dollar estimates. Enforce a soft $50 industry target with early warnings and hard caps.",
+    "narratives": {
+      "Description": "PTBot currently has no visibility into token usage or dollar cost per run or per industry. This makes the $50 per industry economic target impossible to manage and prevents intelligent work selection or early termination. We need persistent, queryable cost accounting as the foundation for all future autonomy and scaling.",
+      "UserStory": "As a PTBot operator building a large precedent transaction database, I want accurate per-run and per-industry cost tracking with budget enforcement so that I can stay within the $50 per industry target and make data-driven decisions about model tiering and work prioritization.",
+      "ImplementationPlan": "1. Add cost-related fields to ResearchParams and create a lightweight CostBreakdown model.\n2. Instrument runners.py and orchestrator.py to capture model, tokens, and compute estimated cost using a static price table.\n3. Extend the SQLite schema in db.py to store costs on runs and add aggregation helpers.\n4. Add CLI flags and config options for budgets.\n5. Surface costs in the Streamlit dashboard.\n6. Add basic cost-aware hooks in the pipeline (warnings + soft caps in v1).\n7. Comprehensive tests and full task check pass."
+    },
+    "items": [
+      {
+        "id": "ca-1",
+        "title": "Cost data model and price table",
+        "status": "todo",
+        "narrative": {
+          "Acceptance": "Static price table + Pydantic models for token counts and USD cost exist and are used by both local and cloud runners."
+        }
+      },
+      {
+        "id": "ca-2",
+        "title": "Persistence of run-level and industry-level cost",
+        "status": "todo",
+        "narrative": {
+          "Acceptance": "Every completed run records input/output tokens and estimated cost. Industry rollups are queryable via new db helpers."
+        }
+      },
+      {
+        "id": "ca-3",
+        "title": "CLI and sweep budget controls",
+        "status": "todo",
+        "narrative": {
+          "Acceptance": "--max-cost flag and sweep config budget fields exist and are respected (at minimum as warnings)."
+        }
+      },
+      {
+        "id": "ca-4",
+        "title": "Dashboard cost visibility",
+        "status": "todo",
+        "narrative": {
+          "Acceptance": "Streamlit dashboard shows per-run and per-industry cost (and remaining budget vs $50 target)."
+        }
+      },
+      {
+        "id": "ca-5",
+        "title": "Full validation gate",
+        "status": "todo",
+        "narrative": {
+          "Acceptance": "All changes pass task check with >=85% coverage on new cost logic."
+        }
+      }
+    ],
+    "metadata": {
+      "kind": "story",
+      "swarm": {
+        "readiness": "ready for concurrent allocation",
+        "parallel_safe": true,
+        "file_scope": ["src/ptbot/models.py", "src/ptbot/runners.py", "src/ptbot/orchestrator.py", "src/ptbot/db.py", "src/ptbot/cli.py", "src/ptbot/sweep.py", "src/ptbot/app.py", "tests/test_cost.py"],
+        "verify_commands": ["task check"],
+        "expected_outputs": ["Cost tracking in runs table", "Budget flags working", "Dashboard cost panels", "Full task check green"],
+        "depends_on": [],
+        "conflict_group": null,
+        "size": "medium",
+        "file_scope_confidence": "high",
+        "model_tier": "standard",
+        "Traces": "Strategy discussion 2026-05"
+      }
+    },
+    "updated": "2026-05-27T02:30:00Z"
+  }
+}

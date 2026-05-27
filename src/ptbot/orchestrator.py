@@ -5,13 +5,23 @@ from __future__ import annotations
 import importlib.util
 import json
 import re
+import sys
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, cast
 
 from . import db as _db
-from .models import AgentRunResult, AgentTask, DealCandidate, PipelinePaths, ResearchParams
+from .models import (
+    AgentRunResult,
+    AgentTask,
+    CostBreakdown,
+    DealCandidate,
+    PipelinePaths,
+    ResearchParams,
+    TokenUsage,
+    estimate_cost,
+)
 from .prompt_builder import build_pass1_tasks, build_pass2_tasks, build_qc_prompt
 from .runners import run_local_agent as _run_local_agent
 
@@ -37,13 +47,23 @@ def load_attack_market_runner(orchestrator_path: Path | None = None) -> Runner:
 
 
 def normalize_result(raw: dict[str, Any]) -> AgentRunResult:
-    """Normalize the dict returned by attack.market into a validated result."""
+    """Normalize the dict returned by attack.market / ptbot runners into a validated result.
+
+    Cost (from cost-accounting-001 instrumentation) is attached when present in raw dict.
+    """
+    cost = None
+    if raw.get("cost"):
+        try:
+            cost = CostBreakdown.model_validate(raw["cost"])
+        except Exception:  # noqa: BLE001 - tolerate bad cost payloads from legacy runners
+            cost = None
     return AgentRunResult(
         state=str(raw.get("state", "UNKNOWN")),
         output=str(raw.get("output", "")),
         run_id=str(raw.get("run_id", "")),
         run_url=str(raw.get("run_url", "")),
         error=str(raw["error"]) if raw.get("error") else None,
+        cost=cost,
     )
 
 
@@ -220,6 +240,37 @@ def _load_default_runner() -> Runner:
         return _run_local_agent
 
 
+def _aggregate_costs(results: list[AgentRunResult], label: str = "run") -> CostBreakdown:
+    """Sum token usage and USD cost across a list of (possibly partial) agent results.
+
+    Falls back to heuristic estimation for any result missing cost (e.g. legacy runners).
+    Always returns a valid CostBreakdown (never raises).
+    """
+    total_in = 0
+    total_out = 0
+    total_usd = 0.0
+    model = "oz-default"
+    for r in results:
+        if r.cost is not None:
+            total_in += r.cost.usage.input_tokens
+            total_out += r.cost.usage.output_tokens
+            total_usd += r.cost.estimated_cost_usd
+            model = r.cost.model or model
+        else:
+            # Fallback for attack.market or un-instrumented paths
+            fb = estimate_cost(r.output or "", r.output or "")
+            total_in += fb.usage.input_tokens
+            total_out += fb.usage.output_tokens
+            total_usd += fb.estimated_cost_usd
+    return CostBreakdown(
+        model=model,
+        usage=TokenUsage(input_tokens=total_in, output_tokens=total_out),
+        estimated_cost_usd=round(total_usd, 6),
+        input_cost_usd=0.0,  # aggregate only tracks total for simplicity
+        output_cost_usd=0.0,
+    )
+
+
 def run_pipeline(
     params: ResearchParams,
     output_dir: Path,
@@ -227,12 +278,14 @@ def run_pipeline(
     runner: Runner | None = None,
     timeout: int = 900,
     db_path: Path | None = None,
+    max_cost: float | None = None,
 ) -> PipelinePaths:
     """Run the full two-pass pipeline and write markdown/JSON outputs.
 
-    When a cloud runner (from runners.make_cloud_runner with registry_db_path)
-    is supplied, every individual oz cloud dispatch is registered in the
-    cloud control plane (cloud-control-001) for kill/status observability.
+    Cost accounting (ca-1/2/3): all agent invocations are instrumented; aggregate
+    CostBreakdown is computed, persisted (when db_path), written to run_metadata.json,
+    and attached to the returned PipelinePaths. If *max_cost* is provided, a warning
+    is emitted when the run exceeds it (soft cap in v1 per vBRIEF).
     """
     active_runner = runner or _load_default_runner()
     supporting_dir = output_dir / "supporting"
@@ -255,6 +308,8 @@ def run_pipeline(
         _db.insert_run(conn, run_id, params)
         _db.insert_deals(conn, run_id, deduped, qualified_keys={d.key() for d in qualified})
         conn.close()
+    else:
+        run_id = None  # for later cost update (only when persisting)
 
     qualified_payload = [deal.model_dump(mode="json") for deal in qualified]
     qualified_path = supporting_dir / "qualified_deals.json"
@@ -272,17 +327,43 @@ def run_pipeline(
     final_markdown = output_dir / "final_deliverable.md"
     final_markdown.write_text(qc_result.output, encoding="utf-8")
 
+    # --- Cost accounting (cost-accounting-001) ---
+    all_results: list[AgentRunResult] = (
+        list(pass1_results.values()) + list(pass2_results.values()) + [qc_result]
+    )
+    run_cost = _aggregate_costs(all_results, "pipeline")
+
+    if max_cost is not None and run_cost.estimated_cost_usd > max_cost:
+        print(
+            f"[ptbot] WARNING: run cost ${run_cost.estimated_cost_usd:.2f} "
+            f"exceeds --max-cost ${max_cost:.2f} "
+            "(soft cap; consider narrower date range, fewer agents, or cheaper model tier)"
+        )
+
+    # Persist full-run cost (late update after all 8 agents; early insert only had pass-1)
+    if db_path is not None and run_id is not None:
+        try:
+            conn = _db.open_db(db_path)
+            _db.update_run_cost(conn, run_id, run_cost)  # added by cost vBRIEF (see db.py)
+            conn.close()
+        except Exception as exc:  # noqa: BLE001 - cost persistence must never break a run
+            print(f"[ptbot] warning: failed to persist run cost: {exc}", file=sys.stderr)
+
+    # Enrich metadata with cost (per-run + per-agent already in the pass1/pass2 dicts via runner)
     metadata = {
         "params": params.model_dump(mode="json"),
         "pass1": {key: value.model_dump(mode="json") for key, value in pass1_results.items()},
         "pass2": {key: value.model_dump(mode="json") for key, value in pass2_results.items()},
         "qc": qc_result.model_dump(mode="json"),
+        "cost": run_cost.model_dump(mode="json"),
     }
     write_json(metadata_dir / "run_metadata.json", metadata)
+
     return PipelinePaths(
         output_dir=output_dir,
         final_markdown=final_markdown,
         final_pdf=output_dir / "final_deliverable.pdf",
         comps_excel=output_dir / "precedent_comps.xlsx",
         qualified_deals=qualified_path,
+        cost=run_cost,
     )
