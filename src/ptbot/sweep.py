@@ -181,7 +181,14 @@ def run_sweep(
     # Resolve the runner: explicit injection > cloud flag > default local.
     if runner is None and cloud:
         env = cloud_environment or config.sweep.cloud_environment
-        runner = make_cloud_runner(environment=env)
+        # cloud-control-001: pass db_path + parent so every oz dispatch is registered
+        # in the persistent control plane (survives parent death / firedrill).
+        parent_ctx = f"sweep:{slug(str(db_path))}"
+        runner = make_cloud_runner(
+            environment=env,
+            registry_db_path=db_path,
+            parent_context=parent_ctx,
+        )
     # else: run_pipeline() resolves the default runner lazily when runner is None.
 
     # Pull DB from S3 before skip detection so existing runs are visible.

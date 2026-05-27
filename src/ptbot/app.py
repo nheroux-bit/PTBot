@@ -14,6 +14,9 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
+from . import db as _db
+from .runners import kill_cloud_run
+
 # ---------------------------------------------------------------------------
 # Page config
 # ---------------------------------------------------------------------------
@@ -41,7 +44,7 @@ db_path = Path(db_path_input).expanduser()
 
 page = st.sidebar.radio(
     "Navigate",
-    ["📊 Dashboard", "🔍 Deal Browser", "🚀 Request Industries"],
+    ["📊 Dashboard", "🔍 Deal Browser", "🚀 Request Industries", "☁️ Cloud Control"],
 )
 
 st.sidebar.divider()
@@ -431,3 +434,88 @@ elif page == "🔍 Deal Browser":
     page_deal_browser(df_deals)
 elif page == "🚀 Request Industries":
     page_request_industries()
+elif page == "☁️ Cloud Control":
+    page_cloud_control()
+
+
+# ---------------------------------------------------------------------------
+# Cloud Control Plane page (cloud-control-001)
+# ---------------------------------------------------------------------------
+
+
+def page_cloud_control() -> None:
+    """Cloud execution control plane visibility + revocation.
+
+    Shows the registry persisted in the DB (survives parent death).
+    Active runs are prominent; kill buttons attempt oz revocation then
+    mark the registry revoked.
+    """
+    st.title("☁️ Cloud Control Plane & Revocation")
+    st.markdown(
+        "Registry of every **oz agent run-cloud** dispatch. "
+        "This table survives the death of the parent sweep, dashboard, or CLI process "
+        "(the 2026-05 firedrill scenario). Use to observe and terminate orphan swarms."
+    )
+
+    db_str = str(db_path)
+    try:
+        conn = _db.open_db(db_path)
+        runs = _db.list_cloud_runs(conn, active_only=False)
+        conn.close()
+    except Exception as exc:
+        st.error(f"Failed to load cloud_runs registry: {exc}")
+        return
+
+    if not runs:
+        st.info("No cloud agent runs recorded yet. Launch a sweep with --cloud or via the Request Industries form.")
+        return
+
+    active = [r for r in runs if r.get("status") in ("dispatched", "running")]
+    terminal = [r for r in runs if r.get("status") not in ("dispatched", "running")]
+
+    st.subheader(f"Active / In-Flight ({len(active)})")
+    if active:
+        for r in active:
+            with st.container(border=True):
+                cols = st.columns([3, 2, 2, 1])
+                with cols[0]:
+                    st.code(r["oz_run_id"], language=None)
+                    st.caption(f"parent: {r.get('parent','')} | env: {r.get('environment','(default)')}")
+                with cols[1]:
+                    st.write(f"**status:** `{r['status']}`")
+                    if r.get("dispatched_at"):
+                        st.caption(f"dispatched: {r['dispatched_at'][:19]}")
+                with cols[2]:
+                    if r.get("cost_estimate_usd") is not None:
+                        st.metric("Est. cost (USD)", f"${r['cost_estimate_usd']:.2f}")
+                    if r.get("run_url"):
+                        st.link_button("Open in Oz", r["run_url"], type="secondary")
+                with cols[3]:
+                    if st.button("KILL", key=f"kill_{r['oz_run_id']}", type="primary"):
+                        with st.spinner("Revoking..."):
+                            ok, msg = kill_cloud_run(r["oz_run_id"], r.get("run_url", ""))
+                            st.write(msg)
+                            if ok or st.session_state.get(f"force_{r['oz_run_id']}", False):
+                                try:
+                                    conn2 = _db.open_db(db_path)
+                                    _db.mark_cloud_run_revoked(conn2, r["oz_run_id"])
+                                    conn2.close()
+                                    st.success("Marked revoked in registry.")
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Registry update failed: {e}")
+                            else:
+                                st.warning("Use force below if the oz CLI surface is not yet available.")
+                    if st.checkbox("force mark", key=f"force_{r['oz_run_id']}"):
+                        pass
+    else:
+        st.caption("No active cloud runs.")
+
+    with st.expander(f"Terminal / Historical ({len(terminal)})"):
+        for r in terminal[:20]:  # bound
+            st.write(
+                f"{r['oz_run_id'][:16]}... | {r['status']} | {r.get('dispatched_at','')[:16]} "
+                f"{'cost $' + str(round(r['cost_estimate_usd'],2)) if r.get('cost_estimate_usd') else ''}"
+            )
+
+    st.caption("Registry is the source of truth for cloud work. All --cloud dispatches (sweep + dashboard) are recorded here via the runners layer.")
