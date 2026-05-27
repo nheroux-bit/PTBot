@@ -29,20 +29,43 @@ def _base_argv(*extra: str) -> list[str]:
 
 def test_sweep_auto_single_sector_builds_config(capsys: pytest.CaptureFixture[str]) -> None:
     """Single sector builds a one-market SweepConfig and calls run_sweep."""
-    with patch("ptbot.cli._handle_sweep_auto_command") as mock_handler:
-        mock_handler.return_value = 0
-        rc = main(_base_argv())
+    captured: list[SweepConfig] = []
+
+    def capture_run(config: SweepConfig, **kwargs: object) -> int:
+        captured.append(config)
+        return 0
+
+    import ptbot.cli as _cli
+
+    with patch("ptbot.sweep.run_sweep", capture_run):
+        rc = _cli._handle_sweep_auto_command(_base_argv())
     assert rc == 0
+    assert len(captured) == 1
+    assert len(captured[0].markets) == 1
+    assert captured[0].markets[0].sector == "FinTech"
+    assert captured[0].markets[0].geography == "United States"
 
 
 def test_sweep_auto_calls_run_sweep_with_correct_config(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    with patch("ptbot.cli._handle_sweep_auto_command") as mock_fn:
-        mock_fn.return_value = 0
-        rc = main(_base_argv("--dry-run"))
+    """Verifies run_sweep is called with dry_run and correct config."""
+    run_kwargs: dict = {}
+    captured: list[SweepConfig] = []
+
+    def capture_run(config: SweepConfig, **kwargs: object) -> int:
+        captured.append(config)
+        run_kwargs.update(kwargs)
+        return 0
+
+    import ptbot.cli as _cli
+
+    with patch("ptbot.sweep.run_sweep", capture_run):
+        rc = _cli._handle_sweep_auto_command(_base_argv("--dry-run"))
     assert rc == 0
-    mock_fn.assert_called_once()
+    assert len(captured) == 1
+    assert run_kwargs.get("dry_run") is True
+    assert captured[0].sweep.years_back == 5  # default
 
 
 def test_sweep_auto_multi_sector_csv(capsys: pytest.CaptureFixture[str]) -> None:
