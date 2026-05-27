@@ -60,7 +60,7 @@ def test_main_full_run_wires_output_generators(monkeypatch, tmp_path: Path) -> N
     """Full CLI mode should call pipeline, PDF, and Excel generators."""
     calls: list[str] = []
 
-    def fake_run_pipeline(params, output_dir, *, timeout, db_path=None):  # type: ignore[no-untyped-def]
+    def fake_run_pipeline(params, output_dir, *, timeout, db_path=None, max_cost=None):  # type: ignore[no-untyped-def]
         calls.append(f"pipeline:{params.sector}:{timeout}:{output_dir}")
         final = tmp_path / "final.md"
         qualified = tmp_path / "qualified.json"

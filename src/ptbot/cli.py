@@ -47,6 +47,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="SQLite database path (e.g. ~/.ptbot/ptbot.db). Omit to skip persistence.",
     )
     parser.add_argument(
+        "--max-cost",
+        type=float,
+        default=None,
+        metavar="USD",
+        help=(
+            "Soft budget warning: emit warning if estimated cost exceeds "
+            "this USD value (cost-accounting-001)"
+        ),
+    )
+    parser.add_argument(
         "--config-only", action="store_true", help="Print generated config and exit"
     )
     return parser
@@ -221,7 +231,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     output_dir = Path(args.output_dir)
     db_path = Path(args.db_path) if args.db_path else None
-    paths = run_pipeline(params, output_dir, timeout=args.timeout, db_path=db_path)
+    paths = run_pipeline(
+        params, output_dir, timeout=args.timeout, db_path=db_path, max_cost=args.max_cost
+    )
     markdown_to_pdf(
         paths.final_markdown, paths.final_pdf, f"{params.sector} Precedent Transactions"
     )

@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from . import db as _db
 from . import db_sync as _db_sync
-from .models import ResearchParams
+from .models import CostBreakdown, ResearchParams
 from .orchestrator import Runner, run_pipeline
 from .runners import make_cloud_runner
 
@@ -46,6 +46,9 @@ class SweepSettings(BaseModel):
     cloud_environment: str | None = Field(default=None)
     # S3-backed DB persistence for cloud deployments (requires AWS CLI)
     db_sync_s3_uri: str | None = Field(default=None)
+    # Cost/budget controls (cost-accounting-001)
+    max_cost_per_run: float | None = Field(default=None)
+    max_cost_per_industry: float = Field(default=50.0, ge=0)
 
 
 class SweepConfig(BaseModel):
@@ -117,8 +120,8 @@ def _run_one(
     db_path: Path,
     output_base: Path,
     runner: Runner | None,
-) -> bool:
-    """Execute a single pipeline run. Returns True on success, False on failure."""
+) -> tuple[bool, CostBreakdown | None]:
+    """Execute a single pipeline run. Returns (success, cost_or_None)."""
     label = (
         f"{market.sector} / {market.geography}"
         f" {start_date[:4]}"
@@ -134,18 +137,23 @@ def _run_one(
     )
     output_dir = output_base / slug(market.sector) / slug(market.geography) / start_date[:4]
     try:
-        run_pipeline(
+        paths = run_pipeline(
             params,
             output_dir,
             runner=runner,
             timeout=config.sweep.timeout,
             db_path=db_path,
+            max_cost=config.sweep.max_cost_per_run,
         )
-        print(f"[sweep] done  {label}")
-        return True
+        cost = paths.cost
+        if cost:
+            print(f"[sweep] done  {label}  (cost=${cost.estimated_cost_usd:.2f})")
+        else:
+            print(f"[sweep] done  {label}")
+        return True, cost
     except Exception as exc:  # noqa: BLE001
         print(f"[sweep] FAIL  {label}: {exc}", file=sys.stderr)
-        return False
+        return False, None
 
 
 def run_sweep(
@@ -232,8 +240,12 @@ def run_sweep(
         print(f"[sweep] dry-run complete — {len(pending)} would run, {skipped} skipped")
         return
 
-    # --- Phase 2: parallel execution ---
+    # --- Phase 2: parallel execution (with per-industry cost budgeting) ---
     completed = failed = 0
+    # Track cumulative cost per (sector|geography) for $50 industry target (ca-3)
+    industry_cost: dict[str, float] = {}
+    target = config.sweep.max_cost_per_industry
+
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {
             pool.submit(
@@ -249,7 +261,17 @@ def run_sweep(
             for market, start_date, end_date in pending
         }
         for future in as_completed(futures):
-            if future.result():
+            ok, cost = future.result()
+            market, start_date, end_date = futures[future]
+            ikey = f"{market.sector}|{market.geography}"
+            if ok and cost:
+                industry_cost[ikey] = industry_cost.get(ikey, 0.0) + cost.estimated_cost_usd
+                if target and industry_cost[ikey] > target:
+                    print(
+                        f"[sweep] WARNING: industry {market.sector}/{market.geography} "
+                        f"cumulative cost ${industry_cost[ikey]:.2f} exceeds target ${target:.2f}"
+                    )
+            if ok:
                 completed += 1
             else:
                 failed += 1
@@ -258,6 +280,11 @@ def run_sweep(
     if failed:
         summary += f", {failed} failed (see stderr)"
     print(summary)
+    if industry_cost:
+        print("[sweep] per-industry cost summary (target=$50):")
+        for ik, c in sorted(industry_cost.items()):
+            over = " (OVER)" if target and c > target else ""
+            print(f"  {ik.replace('|', ' / ')}: ${c:.2f}{over}")
 
     # Push DB to S3 after execution so future runs inherit the new rows.
     if s3_uri:
