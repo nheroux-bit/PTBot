@@ -73,7 +73,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     db_path_override = Path(args.db_path).expanduser() if args.db_path else None
 
     try:
-        run_sweep(
+        failures = run_sweep(
             config,
             dry_run=args.dry_run,
             db_path_override=db_path_override,
@@ -84,7 +84,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except RuntimeError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    return 0
+    return 1 if failures else 0
 
 
 if __name__ == "__main__":

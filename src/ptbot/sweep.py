@@ -214,7 +214,7 @@ def run_sweep(
     cloud: bool = False,
     cloud_environment: str | None = None,
     max_active_cloud_runs: int | None = None,
-) -> None:
+) -> int:
     """Run the sweep across all (market × window) combinations.
 
     Combinations already in the database are skipped.  When *max_workers* > 1
@@ -274,9 +274,9 @@ def run_sweep(
     if cloud and not dry_run:
         cap_conn = _db.open_db(db_path)
         try:
-            active_count = _db.count_active_cloud_runs(cap_conn)
+            active_runs = _db.list_cloud_runs(cap_conn, active_only=True)
+            active_count = len(active_runs)
             if active_count >= wip_cap:
-                active_runs = _db.list_cloud_runs(cap_conn, active_only=True)
                 ids_preview = ", ".join(r["oz_run_id"][:12] + "..." for r in active_runs[:5])
                 extra = f" (+{active_count - 5} more)" if active_count > 5 else ""
                 raise RuntimeError(
@@ -321,7 +321,7 @@ def run_sweep(
             )
             print(f"[sweep] would run  {label}")
         print(f"[sweep] dry-run complete — {len(pending)} would run, {skipped} skipped")
-        return
+        return 0
 
     # --- Phase 2: parallel execution + watchdog ---
     stop_watchdog = threading.Event()
@@ -370,3 +370,5 @@ def run_sweep(
     # Push DB to S3 after execution so future runs inherit the new rows.
     if s3_uri:
         _db_sync.push_db(db_path, s3_uri)
+
+    return failed

@@ -317,10 +317,17 @@ def get_cloud_run(conn: sqlite3.Connection, oz_run_id: str) -> dict[str, Any] | 
 
 
 def mark_cloud_run_revoked(conn: sqlite3.Connection, oz_run_id: str) -> None:
-    """Mark a cloud run revoked (called after successful or best-effort kill)."""
+    """Mark a cloud run revoked (called after successful or best-effort kill).
+
+    Only updates runs still in a non-terminal state ('dispatched' or 'running').
+    Runs that have already reached a terminal state (succeeded, failed, etc.)
+    are left untouched to prevent a watchdog/kill race from overwriting the
+    real outcome.
+    """
     now = datetime.now(UTC).isoformat()
     conn.execute(
-        "UPDATE cloud_runs SET status='revoked', completed_at=? WHERE oz_run_id=?",
+        "UPDATE cloud_runs SET status='revoked', completed_at=? "
+        "WHERE oz_run_id=? AND status IN ('dispatched', 'running')",
         (now, oz_run_id),
     )
     conn.commit()

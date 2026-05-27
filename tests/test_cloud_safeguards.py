@@ -372,3 +372,35 @@ def test_watchdog_logs_kill_failure(tmp_path: Path, capsys: pytest.CaptureFixtur
     captured = capsys.readouterr()
     assert "oz kill failed" in captured.err
     assert "oz CLI unreachable" in captured.err
+
+
+# ---------------------------------------------------------------------------
+# mark_cloud_run_revoked status guard
+# ---------------------------------------------------------------------------
+
+
+def test_mark_revoked_does_not_overwrite_terminal_status(tmp_path: Path) -> None:
+    """mark_cloud_run_revoked should not overwrite succeeded/failed status."""
+    from ptbot.db import mark_cloud_run_revoked
+
+    db_path = _make_db(tmp_path)
+    _add_active_run(db_path, "run-terminal")
+
+    # Move to terminal state
+    conn = open_db(db_path)
+    update_cloud_run(conn, "run-terminal", status="succeeded")
+    conn.close()
+
+    # Attempt revocation — should be a no-op
+    conn = open_db(db_path)
+    mark_cloud_run_revoked(conn, "run-terminal")
+    conn.close()
+
+    # Verify status is still succeeded
+    conn = open_db(db_path)
+    from ptbot.db import get_cloud_run
+
+    run = get_cloud_run(conn, "run-terminal")
+    conn.close()
+    assert run is not None
+    assert run["status"] == "succeeded"

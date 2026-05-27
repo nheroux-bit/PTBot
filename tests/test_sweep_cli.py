@@ -31,7 +31,7 @@ def test_main_success_calls_run_sweep_with_overrides(tmp_path: Path) -> None:
 
     with (
         patch("ptbot.sweep_cli.load_config") as mock_load,
-        patch("ptbot.sweep_cli.run_sweep") as mock_run,
+        patch("ptbot.sweep_cli.run_sweep", return_value=0) as mock_run,
     ):
         mock_load.return_value = MagicMock()
         exit_code = main(
@@ -58,7 +58,7 @@ def test_main_dry_run_flag_forwarded(tmp_path: Path) -> None:
 
     with (
         patch("ptbot.sweep_cli.load_config", return_value=MagicMock()),
-        patch("ptbot.sweep_cli.run_sweep") as mock_run,
+        patch("ptbot.sweep_cli.run_sweep", return_value=0) as mock_run,
     ):
         exit_code = main(["--config", str(cfg), "--dry-run"])
 
@@ -73,7 +73,7 @@ def test_main_cloud_and_environment_flags(tmp_path: Path) -> None:
 
     with (
         patch("ptbot.sweep_cli.load_config", return_value=MagicMock()),
-        patch("ptbot.sweep_cli.run_sweep") as mock_run,
+        patch("ptbot.sweep_cli.run_sweep", return_value=0) as mock_run,
     ):
         exit_code = main(
             [
@@ -112,7 +112,7 @@ def test_main_uses_sys_argv_when_none_passed(
 
     with (
         patch("ptbot.sweep_cli.load_config", return_value=MagicMock()),
-        patch("ptbot.sweep_cli.run_sweep") as mock_run,
+        patch("ptbot.sweep_cli.run_sweep", return_value=0) as mock_run,
     ):
         exit_code = main()
 
@@ -126,6 +126,6 @@ def test_main_returns_zero_on_success(tmp_path: Path) -> None:
 
     with (
         patch("ptbot.sweep_cli.load_config", return_value=MagicMock()),
-        patch("ptbot.sweep_cli.run_sweep"),
+        patch("ptbot.sweep_cli.run_sweep", return_value=0),
     ):
         assert main(["--config", str(cfg)]) == 0
