@@ -324,3 +324,277 @@ def mark_cloud_run_revoked(conn: sqlite3.Connection, oz_run_id: str) -> None:
         (now, oz_run_id),
     )
     conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# New: Database querying layer for agents (exploration + precise selection)
+# Goal: Allow agents to understand what's in the DB and pull exact sets of
+# deals for delivery (especially Excel).
+# ---------------------------------------------------------------------------
+
+
+def row_to_deal_candidate(row: dict[str, Any]) -> DealCandidate:
+    """Convert a row from the deals table back into a DealCandidate."""
+
+    def _safe_json_load(val: Any, default: list[str]) -> list[str]:
+        if not val:
+            return default
+        if isinstance(val, (list, tuple)):
+            return list(val)
+        try:
+            loaded = json.loads(val)
+            return loaded if isinstance(loaded, list) else default
+        except Exception:
+            return default
+
+    multiples = tuple(_safe_json_load(row.get("multiples"), []))
+    source_urls = tuple(_safe_json_load(row.get("source_urls"), []))
+
+    return DealCandidate(
+        target=row["target"],
+        acquirer=row["acquirer"],
+        date=row.get("date"),
+        deal_value=row.get("deal_value"),
+        multiples_disclosed=bool(row.get("multiples_disclosed")),
+        computed_multiples_available=bool(row.get("computed_multiples_available")),
+        multiples=multiples,
+        source_urls=source_urls,
+    )
+
+
+def search_deals(
+    conn: sqlite3.Connection,
+    *,
+    sector: str | None = None,
+    geography: str | None = None,
+    qualified: bool | None = None,
+    target_search: str | None = None,
+    acquirer_search: str | None = None,
+    min_date: str | None = None,
+    max_date: str | None = None,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
+    """
+    Search the deals table with common filters.
+
+    Returns raw rows (with run metadata joined) so agents can inspect and reason.
+    Use row_to_deal_candidate() if you need DealCandidate objects for Excel etc.
+    """
+    conditions: list[str] = []
+    params: list[Any] = []
+
+    if sector:
+        conditions.append("json_extract(r.params, '$.sector') = ?")
+        params.append(sector)
+    if geography:
+        conditions.append("json_extract(r.params, '$.geography') = ?")
+        params.append(geography)
+    if qualified is not None:
+        conditions.append("d.qualified = ?")
+        params.append(1 if qualified else 0)
+    if target_search:
+        conditions.append("d.target LIKE ?")
+        params.append(f"%{target_search}%")
+    if acquirer_search:
+        conditions.append("d.acquirer LIKE ?")
+        params.append(f"%{acquirer_search}%")
+    if min_date:
+        conditions.append("d.date >= ?")
+        params.append(min_date)
+    if max_date:
+        conditions.append("d.date <= ?")
+        params.append(max_date)
+
+    where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
+    limit_clause = f"LIMIT {limit}" if limit else ""
+
+    sql = f"""
+        SELECT
+            d.*,
+            json_extract(r.params, '$.sector')    AS sector,
+            json_extract(r.params, '$.geography') AS geography,
+            r.timestamp                           AS run_timestamp
+        FROM deals d
+        JOIN runs r ON d.run_id = r.run_id
+        {where_clause}
+        ORDER BY d.date DESC, d.target
+        {limit_clause}
+    """
+
+    cursor = conn.execute(sql, params)
+    columns = [description[0] for description in cursor.description]
+    return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
+
+
+def summarize_database(conn: sqlite3.Connection) -> dict[str, Any]:
+    """
+    High-level summary of the database contents.
+    Designed to be returned to an agent so it can tell the user what's available.
+    """
+    summary: dict[str, Any] = {}
+
+    # Basic counts
+    summary["total_runs"] = conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0]
+    summary["total_deals"] = conn.execute("SELECT COUNT(*) FROM deals").fetchone()[0]
+    summary["qualified_deals"] = conn.execute(
+        "SELECT COUNT(*) FROM deals WHERE qualified = 1"
+    ).fetchone()[0]
+
+    # Sectors
+    sectors = conn.execute("""
+        SELECT json_extract(params, '$.sector') as sector, COUNT(*) as run_count
+        FROM runs
+        GROUP BY sector
+        ORDER BY run_count DESC
+        """).fetchall()
+    summary["sectors"] = [{"sector": s[0], "runs": s[1]} for s in sectors if s[0]]
+
+    # Year coverage (from deal dates where possible)
+    years = conn.execute("""
+        SELECT substr(date, 1, 4) as year, COUNT(*) as deal_count
+        FROM deals
+        WHERE date IS NOT NULL
+        GROUP BY year
+        ORDER BY year
+        """).fetchall()
+    summary["years_covered"] = [{"year": y[0], "deals": y[1]} for y in years if y[0]]
+
+    return summary
+
+
+def format_search_results_for_agent(
+    results: list[dict[str, Any]],
+    *,
+    max_items: int = 15,
+) -> str:
+    """
+    Turn the output of search_deals() into a compact, readable text block
+    that an agent can directly use when talking to the user.
+    """
+    if not results:
+        return "No matching deals found in the database."
+
+    lines = [f"Found {len(results)} matching deals in the database:\n"]
+
+    for i, row in enumerate(results[:max_items], 1):
+        multiples = json.loads(row.get("multiples") or "[]")
+        mult_str = "; ".join(multiples[:2]) if multiples else "No multiples listed"
+
+        line = (
+            f"{i}. {row['target']} acquired by {row['acquirer']} "
+            f"({row.get('date', 'date unknown')}) — "
+            f"{row.get('deal_value', 'value unknown')} | "
+            f"{mult_str} | "
+            f"{'Qualified' if row.get('qualified') else 'Not qualified'}"
+        )
+        lines.append(line)
+
+    if len(results) > max_items:
+        lines.append(f"\n... and {len(results) - max_items} more.")
+
+    return "\n".join(lines)
+
+
+def search_deals_as_candidates(
+    conn: sqlite3.Connection,
+    *,
+    sector: str | None = None,
+    geography: str | None = None,
+    qualified: bool | None = None,
+    target_search: str | None = None,
+    acquirer_search: str | None = None,
+    min_date: str | None = None,
+    max_date: str | None = None,
+    limit: int | None = None,
+) -> list[DealCandidate]:
+    """Convenience wrapper: search_deals + convert every row to DealCandidate."""
+    rows = search_deals(
+        conn,
+        sector=sector,
+        geography=geography,
+        qualified=qualified,
+        target_search=target_search,
+        acquirer_search=acquirer_search,
+        min_date=min_date,
+        max_date=max_date,
+        limit=limit,
+    )
+    return [row_to_deal_candidate(r) for r in rows]
+
+
+def get_deal_statistics(
+    conn: sqlite3.Connection,
+    *,
+    sector: str | None = None,
+    geography: str | None = None,
+    qualified: bool | None = True,
+) -> dict[str, Any]:
+    """Lightweight aggregate stats for agents (counts, avg multiples, etc.)."""
+    rows = search_deals(conn, sector=sector, geography=geography, qualified=qualified, limit=5000)
+    if not rows:
+        return {"total_deals": 0, "qualified": 0, "avg_standard_multiples": 0.0}
+
+    total = len(rows)
+    qualified_count = sum(1 for r in rows if r.get("qualified"))
+    multiples_counts = []
+    for r in rows:
+        try:
+            mults = json.loads(r.get("multiples") or "[]")
+            dc = DealCandidate(target=r["target"], acquirer=r["acquirer"], multiples=mults)
+            multiples_counts.append(dc.standard_multiple_count())
+        except Exception:
+            continue
+
+    avg = sum(multiples_counts) / len(multiples_counts) if multiples_counts else 0.0
+    return {
+        "total_deals": total,
+        "qualified": qualified_count,
+        "avg_standard_multiples": round(avg, 2),
+    }
+
+
+def get_top_deals(
+    conn: sqlite3.Connection,
+    *,
+    n: int = 5,
+    by: str = "recent",
+    sector: str | None = None,
+    geography: str | None = None,
+    qualified: bool | None = True,
+) -> list[DealCandidate]:
+    """Return top-N deals by recency or number of standard multiples."""
+    candidates = search_deals_as_candidates(
+        conn, sector=sector, geography=geography, qualified=qualified, limit=500
+    )
+    if by == "multiples":
+        candidates.sort(key=lambda d: d.standard_multiple_count(), reverse=True)
+    else:
+        # default "recent" — rely on search_deals ordering (date DESC)
+        pass
+    return candidates[:n]
+
+
+def get_similar_deals(
+    conn: sqlite3.Connection,
+    *,
+    sector: str | None = None,
+    geography: str | None = None,
+    limit: int = 10,
+    qualified: bool | None = True,
+) -> list[DealCandidate]:
+    """Fuzzy 'similar' search using substring match on sector/geography."""
+    rows = search_deals(conn, qualified=qualified, limit=500)
+    results: list[DealCandidate] = []
+    for r in rows:
+        run_sector = r.get("sector") or ""
+        run_geo = r.get("geography") or ""
+        if (sector and sector.lower() in run_sector.lower()) or (
+            geography and geography.lower() in run_geo.lower()
+        ):
+            try:
+                results.append(row_to_deal_candidate(r))
+            except Exception:
+                continue
+        if len(results) >= limit:
+            break
+    return results

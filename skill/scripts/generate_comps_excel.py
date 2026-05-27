@@ -5,6 +5,9 @@ from _bootstrap import ensure_ptbot_importable
 
 ensure_ptbot_importable()
 
-from ptbot.excel import generate_comps_excel
+from ptbot.excel import (
+    generate_comps_excel,
+    generate_comps_excel_from_deals,
+)
 
-__all__ = ["generate_comps_excel"]
+__all__ = ["generate_comps_excel", "generate_comps_excel_from_deals"]
