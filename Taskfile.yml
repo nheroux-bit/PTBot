@@ -43,6 +43,11 @@ tasks:
       - rm -rf .pytest_cache .mypy_cache .ruff_cache htmlcov build dist *.egg-info
       - find . -name "__pycache__" -type d -prune -exec rm -rf {} +
 
+  app:
+    desc: Launch the Streamlit deal database dashboard
+    cmds:
+      - .venv/bin/streamlit run src/ptbot/app.py
+
   check:
     desc: Pre-commit gate (format check, lint, test, coverage, build)
     cmds:

@@ -49,3 +49,58 @@ precedent-txn-output/
 └── metadata/
     └── run_metadata.json
 ```
+
+## Querying the Historical Deal Database
+
+Once you have run sweeps (or individual analyses with `--db-path`), you can query the accumulated precedent transaction database.
+
+This is especially powerful for agents: an agent can first explore what data already exists, make precise selections, and deliver exactly the requested deals as a clean Excel file.
+
+### Agent-Friendly API (recommended for Oz/Warp agents)
+
+```python
+from skill.scripts.precedent_database import (
+    get_database_summary,
+    search_deals,
+    format_results_for_user,
+    get_deals_for_excel,
+    export_deals_to_excel,
+)
+
+# 1. Understand what is in the database
+summary = get_database_summary()
+# Agent can read this to the user or reason over it
+
+# 2. Agent gathers a precise set (example: 10 qualified FinTech US deals)
+rows = search_deals(
+    sector="FinTech",
+    geography="United States",
+    qualified=True,
+    limit=10,
+)
+
+# 3. Agent can show the user a readable summary of what it found
+print(format_results_for_user(rows))
+
+# 4. Deliver *exactly* those deals as Excel
+# style="light" → simple clean table (great when user asked for a specific small set)
+# style="full" → rich IB-style comps workbook with stats, parsed multiples, sources, etc.
+export_deals_to_excel(
+    rows,
+    output_path="./my-fintech-10-pts.xlsx",
+    title="Selected FinTech Precedent Transactions",
+    style="light",          # or "full"
+)
+```
+
+### Key Functions
+
+- `get_database_summary()` — High-level overview (sectors, years, total qualified deals, etc.)
+- `search_deals(...)` — Powerful filtering (sector, geography, qualified, text search, date ranges, limit)
+- `format_results_for_user(rows)` — Turns results into readable text for the agent to speak
+- `get_deals_for_excel(...)` — One-shot search + conversion to `DealCandidate` objects
+- `export_deals_to_excel(deals_or_rows, output_path, title, style="light"|"full")` — The main delivery mechanism
+
+All functions accept an optional `db_path` argument and default to `~/.ptbot/ptbot.db`.
+
+This capability lets agents move beyond running fresh research to intelligently reusing and curating the large body of historical work already stored in the database.

@@ -1,0 +1,28 @@
+# sweep-tech-sectors.toml — Drones, AI, Fiber Optics, Data Centers, SaaS
+[sweep]
+years_back = 10
+db_path = "~/.ptbot/ptbot.db"
+output_base_dir = "./precedent-txn-output"
+min_multiples = 1
+timeout = 900
+max_workers = 3
+
+[[markets]]
+sector = "Drones"
+geography = "United States"
+
+[[markets]]
+sector = "Artificial Intelligence"
+geography = "United States"
+
+[[markets]]
+sector = "Fiber Optics"
+geography = "United States"
+
+[[markets]]
+sector = "Data Centers"
+geography = "United States"
+
+[[markets]]
+sector = "SaaS"
+geography = "United States"

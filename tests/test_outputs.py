@@ -65,7 +65,7 @@ def test_generate_comps_excel_writes_expected_sheets(tmp_path: Path) -> None:
                     "deal_value": "$330.7M",
                     "multiples": ["goodwill_pct_of_purchase_price: 77%"],
                     "source_urls": ["https://example.com/urbint"],
-                }
+                },
             ]
         ),
         encoding="utf-8",

@@ -7,7 +7,9 @@ import re
 from pathlib import Path
 
 from openpyxl import Workbook
+from openpyxl.cell import Cell
 from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.worksheet.worksheet import Worksheet
 
 from .models import DealCandidate
 from .orchestrator import dedupe_deals, filter_qualified_deals
@@ -145,6 +147,7 @@ def load_deals(path: Path) -> list[DealCandidate]:
         raise ValueError("qualified deals JSON must be a list")
     return [DealCandidate.model_validate(item) for item in data]
 
+
 def prepare_deals(deals: list[DealCandidate]) -> tuple[list[DealCandidate], list[DealCandidate]]:
     """Deduplicate deals and split included comps from qualitative/excluded rows."""
     canonical = dedupe_deals(deals)
@@ -154,7 +157,7 @@ def prepare_deals(deals: list[DealCandidate]) -> tuple[list[DealCandidate], list
     return included, excluded
 
 
-def write_headers(sheet, headers: list[str], fill: str = HEADER_FILL) -> None:  # noqa: ANN001
+def write_headers(sheet: Worksheet, headers: list[str], fill: str = HEADER_FILL) -> None:
     """Write formatted worksheet headers."""
     for col, header in enumerate(headers, start=1):
         cell = sheet.cell(row=1, column=col, value=header)
@@ -163,13 +166,22 @@ def write_headers(sheet, headers: list[str], fill: str = HEADER_FILL) -> None:  
         cell.alignment = Alignment(wrap_text=True)
 
 
-def write_deal_row(sheet, row: int, deal: DealCandidate, included: bool) -> None:  # noqa: ANN001
+def write_deal_row(sheet: Worksheet, row: int, deal: DealCandidate, included: bool) -> None:
     """Write one deal row to a workbook sheet."""
     multiples = parse_multiple_columns(deal)
     enterprise_value = parse_deal_value_to_mm(deal.deal_value)
-    revenue = implied_metric(enterprise_value, multiples["EV/Revenue"])
-    ebitda = implied_metric(enterprise_value, multiples["EV/EBITDA"])
-    arr = implied_metric(enterprise_value, multiples["EV/ARR"])
+    ev_revenue = multiples["EV/Revenue"]
+    ev_ebitda = multiples["EV/EBITDA"]
+    ev_arr = multiples["EV/ARR"]
+    revenue = implied_metric(
+        enterprise_value, float(ev_revenue) if isinstance(ev_revenue, (int, float)) else None
+    )
+    ebitda = implied_metric(
+        enterprise_value, float(ev_ebitda) if isinstance(ev_ebitda, (int, float)) else None
+    )
+    arr = implied_metric(
+        enterprise_value, float(ev_arr) if isinstance(ev_arr, (int, float)) else None
+    )
     values = [
         deal.target,
         deal.acquirer,
@@ -207,7 +219,7 @@ def write_deal_row(sheet, row: int, deal: DealCandidate, included: bool) -> None
         link_cell(sheet.cell(row=row, column=20), first_source)
 
 
-def link_cell(cell, target: str) -> None:  # noqa: ANN001
+def link_cell(cell: Cell, target: str) -> None:
     """Format a cell as a clickable hyperlink."""
     cell.hyperlink = target
     cell.style = "Hyperlink"
@@ -216,7 +228,7 @@ def link_cell(cell, target: str) -> None:  # noqa: ANN001
 
 def implied_metric(enterprise_value: float | None, multiple: float | None) -> float | None:
     """Calculate an implied denominator from enterprise value and a multiple."""
-    if enterprise_value is None or multiple in (None, 0):
+    if enterprise_value is None or multiple is None or multiple == 0:
         return None
     return enterprise_value / multiple
 
@@ -340,3 +352,119 @@ def cell_ref(col: int) -> str:
         col, remainder = divmod(col - 1, 26)
         letters = chr(65 + remainder) + letters
     return letters
+
+
+# ---------------------------------------------------------------------------
+# New: Support for generating Excel directly from in-memory deals
+# and lighter output styles (for when user/agent wants something simpler
+# than the full IB-style precedent comps workbook).
+# ---------------------------------------------------------------------------
+
+
+def generate_comps_excel_from_deals(
+    deals: list[DealCandidate],
+    output_path: Path,
+    title: str,
+    *,
+    style: str = "full",  # "full" | "light"
+) -> None:
+    """
+    Generate an Excel file from an in-memory list of DealCandidate objects.
+
+    This is the key bridge for "agent gathered exactly these deals → deliver Excel".
+
+    style="full"  → Uses the existing rich IB-style workbook (Cover, Comps Table,
+                    Excluded, Benchmarks, Sources).
+    style="light" → Produces a much simpler single-sheet table focused on
+                    the selected deals only (easier to read when you asked
+                    for a precise small set, e.g. "10 specific PTs").
+    """
+    if style == "full":
+        # Reuse the existing high-quality path by writing a temp JSON
+        # and calling the original generator.
+        import json as _json
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as tmp:
+            _json.dump([d.model_dump(mode="json") for d in deals], tmp)
+            tmp_path = Path(tmp.name)
+
+        try:
+            generate_comps_excel(tmp_path, output_path, title)
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
+    elif style == "light":
+        _generate_light_excel(deals, output_path, title)
+    else:
+        raise ValueError(f"Unknown style: {style}. Use 'full' or 'light'.")
+
+
+def _generate_light_excel(
+    deals: list[DealCandidate],
+    output_path: Path,
+    title: str,
+) -> None:
+    """Simple, clean single-sheet Excel with the exact deals requested.
+
+    Layout:
+      Row 1  — title
+      Row 2  — subtitle
+      Row 3  — column headers  (freeze above here → rows 1-3 fixed)
+      Row 4+ — one row per deal
+    """
+    _header_row = 3
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Selected Deals"
+
+    ws["A1"] = title
+    ws["A1"].font = Font(bold=True, size=14)
+
+    ws["A2"] = f"Generated by PTBot — {len(deals)} deals selected"
+    ws["A2"].font = Font(italic=True, color="666666")
+
+    headers = [
+        "Target",
+        "Acquirer",
+        "Date",
+        "Deal Value",
+        "Multiples (text)",
+        "Qualified?",
+        "Sources",
+    ]
+    # Write headers at row 3 directly — write_headers() hardcodes row=1 and
+    # would clobber the title cell set above.
+    for col, header in enumerate(headers, start=1):
+        hdr_cell = ws.cell(row=_header_row, column=col, value=header)
+        hdr_cell.font = Font(bold=True)
+        hdr_cell.fill = PatternFill(fill_type="solid", fgColor=HEADER_FILL)
+        hdr_cell.alignment = Alignment(wrap_text=True)
+
+    for row_idx, deal in enumerate(deals, start=_header_row + 1):  # data starts at row 4
+        multiples_text = "; ".join(deal.multiples) if deal.multiples else ""
+        sources_text = "; ".join(deal.source_urls) if deal.source_urls else ""
+
+        values = [
+            deal.target,
+            deal.acquirer,
+            deal.date or "",
+            deal.deal_value or "",
+            multiples_text,
+            "Yes" if deal.multiples_disclosed or deal.computed_multiples_available else "No",
+            sources_text,
+        ]
+        for col_idx, value in enumerate(values, start=1):
+            data_cell = ws.cell(row=row_idx, column=col_idx, value=value)
+            data_cell.alignment = Alignment(wrap_text=True, vertical="top")
+
+    # Auto-size columns reasonably
+    for col_cells in ws.columns:
+        max_length = max(len(str(c.value or "")) for c in col_cells)  # use 'c' to avoid shadow
+        ws.column_dimensions[col_cells[0].column_letter].width = min(max_length + 2, 50)
+
+    last_row = _header_row + len(deals)  # row 3 when empty; row 3+N when N deals present
+    ws.freeze_panes = "A4"  # freeze title, subtitle, and headers (rows 1-3)
+    ws.auto_filter.ref = f"A{_header_row}:G{last_row}"
+
+    wb.save(output_path)
