@@ -7,6 +7,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- `ptbot sweep:auto` subcommand: populate the deal database without a TOML config file. Pass `--sectors 'FinTech,HealthTech'`, `--geography`, `--years`, and optionally `--environment <oz-env-id>` to dispatch parallel cloud agents across all missing market×year combinations. Existing combinations are skipped automatically; `--dry-run` previews what would run.
 - `ptbot query` subcommand: explore the local deal database without a Streamlit browser. `ptbot query runs` lists pipeline runs with deal counts; `ptbot query deals` searches across all runs with `--sector`, `--geography`, `--since`, and `--qualified-only` filters; `ptbot query export` writes CSV or JSON to stdout or a file. All three accept `--format table|json` (or `csv` for export) and `--db-path`.
 - COST-ESTIMATE.md with pre-build cost analysis and recorded build decision
 - PROJECT-DEFINITION.vbrief.json with project identity, tech stack, and architecture

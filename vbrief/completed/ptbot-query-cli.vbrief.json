@@ -5,7 +5,7 @@
   },
   "plan": {
     "title": "Database Query CLI (ptbot query)",
-    "status": "running",
+    "status": "completed",
     "summary": "Add a `ptbot query` subcommand (or thin wrapper) that lets users explore the SQLite deal database from the terminal without needing the Streamlit dashboard or a separate sqlite3 client.",
     "motivation": "With the new SQLite persistence layer, users and operators need a quick way to list runs, search deals by target/acquirer/sector, inspect multiples, and export subsets. Currently the only options are the Streamlit dashboard or raw sqlite3. A lightweight CLI query interface makes the DB immediately useful for power users and scripting.",
     "deliverables": [
@@ -24,6 +24,6 @@
       "Keep the interface simple; do not duplicate the full power of the Streamlit dashboard",
       "Frozen models — do not change DealCandidate or ResearchParams"
     ],
-    "updated": "2026-05-27T19:23:09Z"
+    "updated": "2026-05-27T19:43:53Z"
   }
 }

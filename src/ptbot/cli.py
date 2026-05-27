@@ -315,6 +315,113 @@ def _truncate(s: str, n: int) -> str:
     return s if len(s) <= n else s[: n - 1] + "…"
 
 
+def _handle_sweep_auto_command(argv: Sequence[str]) -> int:
+    """Handle ptbot sweep:auto — TOML-free parallel cloud sweep orchestrator.
+
+    Builds a SweepConfig on-the-fly from CLI flags and calls run_sweep() with
+    cloud=True so every pipeline task is dispatched as an oz agent run-cloud.
+    The existing ThreadPoolExecutor inside run_sweep() handles parallelism.
+    """
+    from .sweep import MarketTarget, SweepConfig, SweepSettings, run_sweep
+
+    parser = argparse.ArgumentParser(
+        prog="ptbot sweep:auto",
+        description=(
+            "Auto-populate the deal database by sweeping one or more sectors "
+            "over annual windows using parallel cloud agents. No TOML config needed."
+        ),
+    )
+    parser.add_argument(
+        "--sectors",
+        required=True,
+        help="Comma-separated list of sectors/industries to sweep (e.g. 'FinTech,HealthTech')",
+    )
+    parser.add_argument(
+        "--geography",
+        required=True,
+        help="Geographic scope applied to all sectors (e.g. 'United States')",
+    )
+    parser.add_argument(
+        "--years",
+        type=int,
+        default=5,
+        help="Number of calendar years to look back (default: 5)",
+    )
+    parser.add_argument(
+        "--environment",
+        default=None,
+        metavar="ENV_ID",
+        help="Oz cloud environment ID (required for cloud dispatch; local agents used if omitted)",
+    )
+    parser.add_argument(
+        "--db-path",
+        default=None,
+        help="SQLite database path (default: ~/.ptbot/ptbot.db)",
+    )
+    parser.add_argument(
+        "--max-workers",
+        type=int,
+        default=4,
+        help="Maximum parallel agent dispatches (default: 4)",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=900,
+        help="Per-pipeline agent timeout in seconds (default: 900)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print planned runs without invoking any agents",
+    )
+
+    # Accept both 'sweep:auto' and bare argv slice
+    argv_list = list(argv)
+    parse_from = argv_list[1:] if argv_list and argv_list[0].startswith("sweep") else argv_list
+    args = parser.parse_args(parse_from)
+
+    # Parse comma-separated sectors, stripping whitespace
+    sectors = [s.strip() for s in args.sectors.split(",") if s.strip()]
+    if not sectors:
+        print("error: --sectors must contain at least one non-empty sector", file=sys.stderr)
+        return 1
+
+    db_path = Path(args.db_path).expanduser() if args.db_path else _default_db_path()
+
+    # Build SweepConfig programmatically — no TOML file needed
+    settings = SweepSettings(
+        years_back=args.years,
+        db_path=str(db_path),
+        max_workers=args.max_workers,
+        timeout=args.timeout,
+        cloud_environment=args.environment,
+    )
+    markets = [MarketTarget(sector=s, geography=args.geography) for s in sectors]
+    config = SweepConfig(sweep=settings, markets=markets)
+
+    use_cloud = args.environment is not None
+    mode = "cloud" if use_cloud else "local"
+    print(
+        f"[sweep:auto] {len(sectors)} sector(s) × {args.geography} | "
+        f"years_back={args.years} | mode={mode} | max_workers={args.max_workers}"
+    )
+    if not use_cloud:
+        print(
+            "[sweep:auto] note: no --environment given; running local agents. "
+            "Pass --environment <env_id> to dispatch cloud agents."
+        )
+
+    run_sweep(
+        config,
+        dry_run=args.dry_run,
+        db_path_override=db_path,
+        cloud=use_cloud,
+        cloud_environment=args.environment,
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the PTBot argument parser.
 
@@ -486,6 +593,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     full single-run flag set.
     """
     raw_argv: list[str] = list(argv) if argv is not None else sys.argv[1:]
+
+    # Early dispatch for sweep:auto
+    if raw_argv and raw_argv[0] == "sweep:auto":
+        return _handle_sweep_auto_command(raw_argv)
 
     # Early dispatch for query subcommand
     if raw_argv and (raw_argv[0] == "query" or raw_argv[0].startswith("query:")):
