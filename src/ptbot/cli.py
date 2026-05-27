@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import csv
+import io
 import json
+import sqlite3
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -13,6 +16,303 @@ from .models import ResearchParams
 from .orchestrator import run_pipeline
 from .pdf import markdown_to_pdf
 from .prompt_builder import build_config
+
+
+def _fmt_table(headers: list[str], rows: list[list[str]]) -> str:
+    """Format headers + rows as a plain-text table (no external deps)."""
+    if not rows:
+        return "  (no records)"
+    col_widths = [len(h) for h in headers]
+    for row in rows:
+        for i, cell in enumerate(row):
+            col_widths[i] = max(col_widths[i], len(str(cell)))
+    sep = "  ".join("-" * w for w in col_widths)
+    hdr = "  ".join(h.ljust(col_widths[i]) for i, h in enumerate(headers))
+    lines = [hdr, sep]
+    for row in rows:
+        lines.append("  ".join(str(c).ljust(col_widths[i]) for i, c in enumerate(row)))
+    return "\n".join(lines)
+
+
+def _open_db_or_exit(db_path: Path) -> sqlite3.Connection:
+    """Open the deal database, printing a friendly error if absent."""
+    from . import db as _db
+
+    if not db_path.exists():
+        print(
+            f"Database not found: {db_path}\n"
+            "Run ptbot with --db-path to create it, or point --db-path at an existing file.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    return _db.open_db(db_path)
+
+
+def _handle_query_command(argv: Sequence[str]) -> int:  # noqa: C901 — intentionally long handler
+    """Handle ptbot query runs / deals / export."""
+    from . import db as _db
+
+    parser = argparse.ArgumentParser(
+        prog="ptbot query",
+        description="Explore and export the local PTBot deal database.",
+    )
+    parser.add_argument(
+        "--db-path",
+        default=None,
+        help="Path to the SQLite database (default: ~/.ptbot/ptbot.db)",
+    )
+    sub = parser.add_subparsers(dest="subcommand", required=True)
+
+    # ---- runs ---------------------------------------------------------------
+    runs_p = sub.add_parser("runs", help="List pipeline runs in the database")
+    runs_p.add_argument(
+        "--db-path", default=None, help="Path to the SQLite database (default: ~/.ptbot/ptbot.db)"
+    )
+    runs_p.add_argument(
+        "--limit", type=int, default=20, help="Maximum number of runs to show (default: 20)"
+    )
+    runs_p.add_argument(
+        "--since",
+        default=None,
+        metavar="DATE",
+        help="Only show runs on or after DATE (YYYY-MM-DD)",
+    )
+    runs_p.add_argument(
+        "--format",
+        choices=["table", "json"],
+        default="table",
+        help="Output format (default: table)",
+    )
+
+    # ---- deals --------------------------------------------------------------
+    deals_p = sub.add_parser("deals", help="Search deals across all runs")
+    deals_p.add_argument(
+        "--db-path", default=None, help="Path to the SQLite database (default: ~/.ptbot/ptbot.db)"
+    )
+    deals_p.add_argument("--sector", default=None, help="Filter by sector (exact match)")
+    deals_p.add_argument("--geography", default=None, help="Filter by geography (exact match)")
+    deals_p.add_argument(
+        "--since",
+        default=None,
+        metavar="DATE",
+        help="Only show deals on or after DATE (YYYY-MM-DD)",
+    )
+    deals_p.add_argument(
+        "--qualified-only",
+        action="store_true",
+        help="Only show qualified deals (have disclosed standard multiples)",
+    )
+    deals_p.add_argument(
+        "--limit", type=int, default=50, help="Maximum number of deals to show (default: 50)"
+    )
+    deals_p.add_argument(
+        "--format",
+        choices=["table", "json"],
+        default="table",
+        help="Output format (default: table)",
+    )
+
+    # ---- export -------------------------------------------------------------
+    export_p = sub.add_parser("export", help="Export deals to CSV or JSON")
+    export_p.add_argument(
+        "--db-path", default=None, help="Path to the SQLite database (default: ~/.ptbot/ptbot.db)"
+    )
+    export_p.add_argument("--sector", default=None, help="Filter by sector")
+    export_p.add_argument("--geography", default=None, help="Filter by geography")
+    export_p.add_argument(
+        "--qualified-only",
+        action="store_true",
+        help="Only export qualified deals",
+    )
+    export_p.add_argument(
+        "--limit", type=int, default=None, help="Maximum number of deals to export (default: all)"
+    )
+    export_p.add_argument(
+        "--format",
+        choices=["csv", "json"],
+        default="csv",
+        help="Export format (default: csv)",
+    )
+    export_p.add_argument(
+        "--output",
+        default="-",
+        metavar="FILE",
+        help="Output file path (default: stdout)",
+    )
+
+    # Normalise "query:runs" → "query runs" etc.
+    argv_list = list(argv)
+    if argv_list and ":" in argv_list[0]:
+        sub_name = argv_list[0].split(":", 1)[1]
+        argv_list = ["query", sub_name] + argv_list[1:]
+
+    args = parser.parse_args(argv_list[1:] if argv_list and argv_list[0] == "query" else argv_list)
+
+    db_path = (
+        Path(args.db_path).expanduser() if getattr(args, "db_path", None) else _default_db_path()
+    )
+
+    # ---- dispatch -----------------------------------------------------------
+    if args.subcommand == "runs":
+        conn = _open_db_or_exit(db_path)
+        try:
+            runs = _db.list_runs_with_stats(conn, since=args.since, limit=args.limit)
+        finally:
+            conn.close()
+        if args.format == "json":
+            print(json.dumps(runs, indent=2))
+            return 0
+        if not runs:
+            print("No runs found.")
+            return 0
+        headers = ["run_id", "sector", "geography", "period", "deals", "qualified"]
+        table_rows = [
+            [
+                r["run_id"][:12] + "...",
+                str(r.get("sector") or ""),
+                str(r.get("geography") or ""),
+                f"{r.get('start_date','?')} \u2013 {r.get('end_date','?')}",
+                str(r.get("total_deals", 0)),
+                str(r.get("qualified_deals") or 0),
+            ]
+            for r in runs
+        ]
+        print(f"Runs in {db_path} (newest first, limit={args.limit}):")
+        print(_fmt_table(headers, table_rows))
+        return 0
+
+    if args.subcommand == "deals":
+        conn = _open_db_or_exit(db_path)
+        try:
+            rows = _db.search_deals(
+                conn,
+                sector=args.sector,
+                geography=args.geography,
+                min_date=args.since,
+                qualified=True if args.qualified_only else None,
+                limit=args.limit,
+            )
+        finally:
+            conn.close()
+        if not rows:
+            print("No deals found matching the given filters.")
+            return 0
+        if args.format == "json":
+            # Omit bulky internal fields for readability
+            out = [
+                {
+                    "target": r["target"],
+                    "acquirer": r["acquirer"],
+                    "date": r.get("date"),
+                    "deal_value": r.get("deal_value"),
+                    "sector": r.get("sector"),
+                    "geography": r.get("geography"),
+                    "qualified": bool(r.get("qualified")),
+                    "multiples": _safe_load_json_list(r.get("multiples")),
+                }
+                for r in rows
+            ]
+            print(json.dumps(out, indent=2))
+        else:
+            headers = ["target", "acquirer", "date", "deal_value", "sector", "Q?"]
+            table_rows = [
+                [
+                    _truncate(r["target"], 28),
+                    _truncate(r["acquirer"], 22),
+                    str(r.get("date") or ""),
+                    _truncate(str(r.get("deal_value") or ""), 12),
+                    _truncate(str(r.get("sector") or ""), 16),
+                    "Y" if r.get("qualified") else "N",
+                ]
+                for r in rows
+            ]
+            filters = ", ".join(
+                f"{k}={v}"
+                for k, v in [
+                    ("sector", args.sector),
+                    ("geography", args.geography),
+                    ("since", args.since),
+                    ("qualified_only", args.qualified_only or None),
+                ]
+                if v
+            )
+            print(f"Deals ({len(rows)} shown{', ' + filters if filters else ''}):")
+            print(_fmt_table(headers, table_rows))
+        return 0
+
+    if args.subcommand == "export":
+        conn = _open_db_or_exit(db_path)
+        try:
+            rows = _db.search_deals(
+                conn,
+                sector=args.sector,
+                geography=args.geography,
+                qualified=True if args.qualified_only else None,
+                limit=args.limit,
+            )
+        finally:
+            conn.close()
+
+        export_cols = [
+            "target",
+            "acquirer",
+            "date",
+            "deal_value",
+            "sector",
+            "geography",
+            "qualified",
+            "multiples",
+        ]
+        export_rows = [
+            {
+                "target": r["target"],
+                "acquirer": r["acquirer"],
+                "date": r.get("date") or "",
+                "deal_value": r.get("deal_value") or "",
+                "sector": r.get("sector") or "",
+                "geography": r.get("geography") or "",
+                "qualified": "true" if r.get("qualified") else "false",
+                "multiples": "; ".join(_safe_load_json_list(r.get("multiples"))),
+            }
+            for r in rows
+        ]
+
+        out_path = args.output
+        if args.format == "json":
+            content = json.dumps(export_rows, indent=2)
+        else:
+            buf = io.StringIO()
+            writer = csv.DictWriter(buf, fieldnames=export_cols)
+            writer.writeheader()
+            writer.writerows(export_rows)
+            content = buf.getvalue()
+
+        if out_path == "-":
+            print(content, end="")
+        else:
+            Path(out_path).write_text(content, encoding="utf-8")
+            print(f"Exported {len(rows)} deals to {out_path}")
+        return 0
+
+    return 1
+
+
+def _safe_load_json_list(value: object) -> list[str]:
+    """Parse a JSON-encoded list from a DB cell, returning [] on failure."""
+    if not value:
+        return []
+    if isinstance(value, list):
+        return [str(v) for v in value]
+    try:
+        loaded = json.loads(str(value))
+        return [str(v) for v in loaded] if isinstance(loaded, list) else []
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+
+def _truncate(s: str, n: int) -> str:
+    """Truncate a string to n characters, adding an ellipsis if needed."""
+    return s if len(s) <= n else s[: n - 1] + "…"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -186,6 +486,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     full single-run flag set.
     """
     raw_argv: list[str] = list(argv) if argv is not None else sys.argv[1:]
+
+    # Early dispatch for query subcommand
+    if raw_argv and (raw_argv[0] == "query" or raw_argv[0].startswith("query:")):
+        return _handle_query_command(raw_argv)
 
     # Early dispatch for cloud control plane (does not consume the run parser)
     if (

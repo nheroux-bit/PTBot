@@ -7,6 +7,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- `ptbot query` subcommand: explore the local deal database without a Streamlit browser. `ptbot query runs` lists pipeline runs with deal counts; `ptbot query deals` searches across all runs with `--sector`, `--geography`, `--since`, and `--qualified-only` filters; `ptbot query export` writes CSV or JSON to stdout or a file. All three accept `--format table|json` (or `csv` for export) and `--db-path`.
 - COST-ESTIMATE.md with pre-build cost analysis and recorded build decision
 - PROJECT-DEFINITION.vbrief.json with project identity, tech stack, and architecture
 - Cloud Execution Control Plane (cloud-control-001): persistent cloud_runs registry in db.py, early registration + live Popen in runners.py for firedrill-proof revocation, ptbot cloud status/kill CLI (and cloud: variants), dashboard "☁️ Cloud Control" page with kill buttons. Robust best-effort oz kill + registry marking. All dispatches via sweep/dashboard now registered. 13 new tests in tests/test_cloud_control.py. Coordinated with parallel cost agent on db/runners.
