@@ -1,0 +1,238 @@
+{
+  "tool": "PTBot",
+  "version": "1.0.0",
+  "description": "Two-pass precedent transaction research pipeline for Warp/Oz agents. Discovers M&A deals, filters to qualified multiples, deep-dives, and delivers markdown/PDF/Excel output. Persists deals to SQLite for cross-run querying and sweeps.",
+  "entrypoints": {
+    "ptbot": "Single pipeline run",
+    "ptbot-sweep": "TOML-config batch sweep",
+    "ptbot sweep:auto": "Inline batch sweep (no config file)",
+    "ptbot query": "Terminal database explorer",
+    "ptbot app": "Streamlit dashboard",
+    "ptbot cloud": "Cloud agent control plane"
+  },
+  "commands": {
+    "ptbot": {
+      "description": "Run a single precedent transaction analysis for one sector/geography/period.",
+      "required_flags": {
+        "--sector": "Sector or industry vertical (e.g. 'FinTech', 'Vertical SaaS')",
+        "--geography": "Geographic scope (e.g. 'United States', 'Europe')",
+        "--start-date": "Start date in YYYY-MM-DD format",
+        "--end-date": "End date in YYYY-MM-DD format"
+      },
+      "optional_flags": {
+        "--db-path": "SQLite database path for persistence (e.g. ~/.ptbot/ptbot.db). Omit to skip.",
+        "--output-dir": "Output directory (default: ./precedent-txn-output)",
+        "--min-multiples": "Minimum qualifying standard multiples required per deal (default: 1)",
+        "--deal-size-min": "Minimum deal size filter (text, e.g. '$50M')",
+        "--deal-size-max": "Maximum deal size filter (text)",
+        "--timeout": "Per-agent timeout in seconds (default: 900)",
+        "--config-only": "Print generated config JSON and exit without running agents"
+      },
+      "outputs": {
+        "final_deliverable.md": "QC-reviewed markdown report",
+        "final_deliverable.pdf": "PDF version of the report",
+        "precedent_comps.xlsx": "IB-formatted Excel comps workbook",
+        "supporting/qualified_deals.json": "Filtered deal manifest",
+        "supporting/pass1_compiled_deals.md": "Discovery scout output",
+        "supporting/pass2_compiled_deep.md": "Deep-dive agent output",
+        "supporting/qc_report.md": "QC agent output",
+        "metadata/run_metadata.json": "Run parameters and execution metadata"
+      },
+      "examples": [
+        ".venv/bin/ptbot --sector 'FinTech' --geography 'United States' --start-date 2023-01-01 --end-date 2023-12-31 --db-path ~/.ptbot/ptbot.db",
+        ".venv/bin/ptbot --sector 'HealthTech' --geography 'Europe' --start-date 2022-01-01 --end-date 2024-12-31 --config-only"
+      ]
+    },
+
+    "ptbot sweep:auto": {
+      "description": "Auto-populate the deal database by sweeping one or more sectors over annual windows using parallel cloud agents. No TOML config file needed. Existing market×year combinations are skipped automatically.",
+      "required_flags": {
+        "--sectors": "Comma-separated list of sectors (e.g. 'FinTech,HealthTech,SaaS')",
+        "--geography": "Geographic scope applied to all sectors"
+      },
+      "optional_flags": {
+        "--years": "Number of calendar years to look back (default: 5)",
+        "--environment": "Oz cloud environment ID — enables cloud dispatch and parallel execution. Omit to use local agents.",
+        "--db-path": "SQLite database path (default: ~/.ptbot/ptbot.db)",
+        "--max-workers": "Maximum parallel agent dispatches (default: 4)",
+        "--timeout": "Per-pipeline agent timeout in seconds (default: 900)",
+        "--max-active": "Abort if this many cloud runs are already active in the registry (default: 10). See cloud safeguards.",
+        "--dry-run": "Print planned runs without invoking any agents"
+      },
+      "safeguards": [
+        "WIP cap: aborts before dispatch if active cloud runs >= --max-active",
+        "Timeout watchdog: daemon thread kills runs past timeout x 1.5 seconds",
+        "Skip detection: existing combinations are never re-run"
+      ],
+      "examples": [
+        ".venv/bin/ptbot sweep:auto --sectors 'FinTech,HealthTech' --geography 'United States' --years 5 --environment env-prod-42",
+        ".venv/bin/ptbot sweep:auto --sectors 'SaaS,Drones,AI' --geography 'United States' --dry-run",
+        ".venv/bin/ptbot sweep:auto --sectors 'VerticalSaaS' --geography 'Europe' --years 3"
+      ]
+    },
+
+    "ptbot-sweep": {
+      "description": "TOML-config-driven sweep runner. Use for version-controlled or scheduled sweeps. Supports the same skip logic and cloud dispatch as sweep:auto.",
+      "required_flags": {
+        "--config": "Path to TOML sweep config file (see sweep.example.toml)"
+      },
+      "optional_flags": {
+        "--db-path": "Override the db_path from config",
+        "--cloud": "Dispatch cloud agents instead of local agents",
+        "--environment": "Oz cloud environment ID (for --cloud runs)",
+        "--max-active": "WIP cap override (default: from config, fallback 10)",
+        "--dry-run": "Print planned runs without executing any agents"
+      },
+      "config_fields": {
+        "sweep.years_back": "Number of annual windows to generate (default: 10)",
+        "sweep.db_path": "SQLite database path (default: ~/.ptbot/ptbot.db)",
+        "sweep.output_base_dir": "Base directory for run outputs",
+        "sweep.min_multiples": "Minimum multiples per deal (default: 1)",
+        "sweep.timeout": "Per-pipeline timeout in seconds (default: 900)",
+        "sweep.max_workers": "Parallel pipeline cap (default: 1)",
+        "sweep.cloud_environment": "Default Oz environment for --cloud runs",
+        "sweep.max_active_cloud_runs": "WIP cap (default: 10)",
+        "sweep.db_sync_s3_uri": "Optional S3 URI for cross-run DB sync (e.g. s3://bucket/ptbot.db)",
+        "markets[].sector": "Sector name",
+        "markets[].geography": "Geographic scope"
+      },
+      "examples": [
+        ".venv/bin/ptbot-sweep --config tech-sectors.toml --dry-run",
+        ".venv/bin/ptbot-sweep --config tech-sectors.toml --cloud --environment env-prod-42",
+        ".venv/bin/ptbot-sweep --config tech-sectors.toml --db-path ~/custom/ptbot.db"
+      ]
+    },
+
+    "ptbot query runs": {
+      "description": "List pipeline runs in the database with per-run deal counts.",
+      "optional_flags": {
+        "--db-path": "Database path (default: ~/.ptbot/ptbot.db)",
+        "--limit": "Maximum number of runs to show (default: 20)",
+        "--since": "Only show runs on or after DATE (YYYY-MM-DD)",
+        "--format": "Output format: 'table' (default) or 'json'"
+      },
+      "examples": [
+        ".venv/bin/ptbot query runs",
+        ".venv/bin/ptbot query runs --format json",
+        ".venv/bin/ptbot query runs --since 2024-01-01 --limit 5"
+      ]
+    },
+
+    "ptbot query deals": {
+      "description": "Search deals across all pipeline runs with optional filters.",
+      "optional_flags": {
+        "--db-path": "Database path (default: ~/.ptbot/ptbot.db)",
+        "--sector": "Filter by sector (exact match)",
+        "--geography": "Filter by geography (exact match)",
+        "--since": "Only show deals on or after DATE (YYYY-MM-DD)",
+        "--qualified-only": "Only show qualified deals (have disclosed standard multiples)",
+        "--limit": "Maximum number of deals to show (default: 50)",
+        "--format": "Output format: 'table' (default) or 'json'"
+      },
+      "examples": [
+        ".venv/bin/ptbot query deals --sector 'FinTech' --qualified-only",
+        ".venv/bin/ptbot query deals --geography 'United States' --format json",
+        ".venv/bin/ptbot query deals --since 2023-01-01 --limit 20"
+      ]
+    },
+
+    "ptbot query export": {
+      "description": "Export deals to CSV or JSON for downstream use.",
+      "optional_flags": {
+        "--db-path": "Database path (default: ~/.ptbot/ptbot.db)",
+        "--sector": "Filter by sector",
+        "--geography": "Filter by geography",
+        "--qualified-only": "Only export qualified deals",
+        "--limit": "Maximum number of deals to export (default: all)",
+        "--format": "Export format: 'csv' (default) or 'json'",
+        "--output": "Output file path (default: stdout)"
+      },
+      "examples": [
+        ".venv/bin/ptbot query export --sector 'FinTech' --output fintech-deals.csv",
+        ".venv/bin/ptbot query export --format json --qualified-only",
+        ".venv/bin/ptbot query export --geography 'United States' --output us-deals.json --format json"
+      ]
+    },
+
+    "ptbot cloud status": {
+      "description": "List cloud agent dispatches in the registry.",
+      "optional_flags": {
+        "--db-path": "Database path (default: ~/.ptbot/ptbot.db)",
+        "--all": "Include terminal (completed/revoked) runs. Default: active only."
+      },
+      "examples": [
+        ".venv/bin/ptbot cloud status",
+        ".venv/bin/ptbot cloud status --all"
+      ]
+    },
+
+    "ptbot cloud kill": {
+      "description": "Revoke/kill a specific cloud Oz run by its run ID or URL prefix.",
+      "required_flags": {
+        "run_id": "The oz run_id from a prior cloud dispatch (or run_url prefix)"
+      },
+      "optional_flags": {
+        "--db-path": "Database path (default: ~/.ptbot/ptbot.db)",
+        "--force": "Mark revoked in registry even if oz CLI kill command fails"
+      },
+      "examples": [
+        ".venv/bin/ptbot cloud kill abc123def456",
+        ".venv/bin/ptbot cloud kill abc123 --force"
+      ]
+    },
+
+    "ptbot cloud kill-all": {
+      "description": "Nuclear firedrill recovery: kills every active cloud run in the registry in one command. Marks all runs revoked in the DB even when the oz CLI fails.",
+      "optional_flags": {
+        "--db-path": "Database path (default: ~/.ptbot/ptbot.db)",
+        "--dry-run": "Print what would be killed without taking action"
+      },
+      "examples": [
+        ".venv/bin/ptbot cloud kill-all",
+        ".venv/bin/ptbot cloud kill-all --dry-run"
+      ]
+    },
+
+    "ptbot app": {
+      "description": "Launch the Streamlit deal database dashboard. Provides interactive deal browser, run history, and Cloud Control page for managing active cloud dispatches.",
+      "optional_flags": {},
+      "examples": [
+        ".venv/bin/ptbot app"
+      ]
+    }
+  },
+
+  "database": {
+    "default_path": "~/.ptbot/ptbot.db",
+    "tables": {
+      "runs": "One row per pipeline run with params JSON and timestamp",
+      "deals": "One row per deal candidate with qualification status and multiples",
+      "cloud_runs": "One row per cloud agent dispatch with status, run_url, and revocation tracking"
+    },
+    "s3_sync": "Set sweep.db_sync_s3_uri in TOML config to pull before and push after each sweep run"
+  },
+
+  "cloud_safeguards": {
+    "kill_all": "ptbot cloud kill-all [--dry-run] — kills every active run; marks revoked even when oz CLI fails",
+    "wip_cap": "--max-active N (default: 10) — aborts before dispatch if active cloud runs >= N. Message includes blocking run IDs.",
+    "timeout_watchdog": "Daemon thread launched automatically during cloud sweeps. Polls every 60s; kills runs past timeout x 1.5 seconds. Stops on sweep completion or Ctrl-C."
+  },
+
+  "agent_integration": {
+    "skill_path": "skill/scripts/precedent_database.py",
+    "description": "Agent-facing facade exposing search_deals, export_deals_to_excel, query_and_export_excel, and get_database_summary. Import directly in Oz agent scripts.",
+    "key_functions": {
+      "get_database_summary()": "Returns total runs, deals, qualified deals, sectors covered, and years in the DB",
+      "search_deals(sector, geography, qualified, limit)": "Returns raw deal rows matching filters",
+      "export_deals_to_excel(deals_or_rows, output_path, title, style)": "Writes deals to Excel. style='light' for simple single-sheet; style='full' for IB-formatted workbook.",
+      "query_and_export_excel(sector, geography, limit, output_path, title, style)": "One-shot: search + export in a single call"
+    }
+  },
+
+  "development": {
+    "pre_commit_gate": "task check",
+    "coverage_threshold": "85%",
+    "test_count": 164,
+    "coverage": "87.7%"
+  }
+}
