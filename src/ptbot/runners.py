@@ -209,18 +209,20 @@ def run_cloud_agent(
 
                             conn = _db.open_db(registry_db_path)
                             excerpt = prompt[:200] + ("..." if len(prompt) > 200 else "")
-                            _db.register_cloud_dispatch(
-                                conn,
-                                oz_run_id,
-                                parent=parent_context or "cloud-dispatch",
-                                environment=environment,
-                                cost_estimate_usd=None,  # populated on completion if cost present
-                                run_url=oz_run_url,
-                                prompt_excerpt=excerpt,
-                            )
-                            # Mark running now that we have confirmation it launched
-                            _db.update_cloud_run(conn, oz_run_id, status="running")
-                            conn.close()
+                            try:
+                                _db.register_cloud_dispatch(
+                                    conn,
+                                    oz_run_id,
+                                    parent=parent_context or "cloud-dispatch",
+                                    environment=environment,
+                                    cost_estimate_usd=None,  # populated later if cost present
+                                    run_url=oz_run_url,
+                                    prompt_excerpt=excerpt,
+                                )
+                                # Mark running now that we have confirmation it launched
+                                _db.update_cloud_run(conn, oz_run_id, status="running")
+                            finally:
+                                conn.close()
                         except (
                             Exception
                         ) as reg_exc:  # noqa: BLE001 - registry must never kill the dispatch
@@ -261,29 +263,31 @@ def run_cloud_agent(
 
                 conn = _db.open_db(registry_db_path)
                 excerpt = prompt[:200] + ("..." if len(prompt) > 200 else "")
-                # Ensure registered even if no early event (defensive)
-                _db.register_cloud_dispatch(
-                    conn,
-                    oz_run_id,
-                    parent=parent_context or "cloud-dispatch",
-                    environment=environment,
-                    run_url=oz_run_url or parsed_url,
-                    prompt_excerpt=excerpt,
-                )
-                final_status = (
-                    "succeeded"
-                    if state == "SUCCEEDED"
-                    else ("timed_out" if state == "TIMED_OUT" else "failed")
-                )
-                # If cost present in a future extended result, it would be here; for now None
-                _db.update_cloud_run(
-                    conn,
-                    oz_run_id,
-                    status=final_status,
-                    exit_code=exit_code,
-                    error=error,
-                )
-                conn.close()
+                try:
+                    # Ensure registered even if no early event (defensive)
+                    _db.register_cloud_dispatch(
+                        conn,
+                        oz_run_id,
+                        parent=parent_context or "cloud-dispatch",
+                        environment=environment,
+                        run_url=oz_run_url or parsed_url,
+                        prompt_excerpt=excerpt,
+                    )
+                    final_status = (
+                        "succeeded"
+                        if state == "SUCCEEDED"
+                        else ("timed_out" if state == "TIMED_OUT" else "failed")
+                    )
+                    # If cost present in a future extended result, it would be here; for now None
+                    _db.update_cloud_run(
+                        conn,
+                        oz_run_id,
+                        status=final_status,
+                        exit_code=exit_code,
+                        error=error,
+                    )
+                finally:
+                    conn.close()
             except Exception as reg_exc:  # noqa: BLE001
                 print(
                     f"[cloud-control] final registry update warning: {reg_exc}",
@@ -316,18 +320,20 @@ def run_cloud_agent(
             from . import db as _db
 
             conn = _db.open_db(registry_db_path)
-            _db.register_cloud_dispatch(
-                conn,
-                oz_run_id,
-                parent=parent_context or "cloud-dispatch",
-                environment=environment,
-                run_url=oz_run_url,
-                prompt_excerpt=prompt[:200],
-            )
-            _db.update_cloud_run(
-                conn, oz_run_id, status=state.lower(), exit_code=exit_code, error=error
-            )
-            conn.close()
+            try:
+                _db.register_cloud_dispatch(
+                    conn,
+                    oz_run_id,
+                    parent=parent_context or "cloud-dispatch",
+                    environment=environment,
+                    run_url=oz_run_url,
+                    prompt_excerpt=prompt[:200],
+                )
+                _db.update_cloud_run(
+                    conn, oz_run_id, status=state.lower(), exit_code=exit_code, error=error
+                )
+            finally:
+                conn.close()
         except Exception:
             pass  # pragma: no cover
 

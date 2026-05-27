@@ -406,7 +406,9 @@ def search_deals(
         params.append(max_date)
 
     where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
-    limit_clause = f"LIMIT {limit}" if limit else ""
+    limit_clause = (
+        f"LIMIT {int(limit)}" if limit else ""
+    )  # int() guards against non-integer callers
 
     sql = f"""
         SELECT
@@ -477,7 +479,10 @@ def format_search_results_for_agent(
     lines = [f"Found {len(results)} matching deals in the database:\n"]
 
     for i, row in enumerate(results[:max_items], 1):
-        multiples = json.loads(row.get("multiples") or "[]")
+        try:
+            multiples = json.loads(row.get("multiples") or "[]")
+        except (json.JSONDecodeError, TypeError):
+            multiples = []
         mult_str = "; ".join(multiples[:2]) if multiples else "No multiples listed"
 
         line = (
