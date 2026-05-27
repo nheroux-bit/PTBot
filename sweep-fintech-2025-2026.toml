@@ -1,0 +1,12 @@
+# sweep-fintech-2025-2026.toml — backfill FinTech US 2025 and 2026
+[sweep]
+years_back = 2
+db_path = "~/.ptbot/ptbot.db"
+output_base_dir = "./precedent-txn-output"
+min_multiples = 1
+timeout = 900
+max_workers = 2
+
+[[markets]]
+sector = "FinTech"
+geography = "United States"

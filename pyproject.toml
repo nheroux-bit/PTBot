@@ -15,6 +15,7 @@ dependencies = [
 
 [project.scripts]
 ptbot = "ptbot.cli:main"
+ptbot-sweep = "ptbot.sweep_cli:main"
 
 [project.optional-dependencies]
 dev = [
@@ -25,6 +26,11 @@ dev = [
   "pytest-cov>=5.0",
   "pytest-mock>=3.14",
   "ruff>=0.5",
+]
+app = [
+  "streamlit>=1.35",
+  "pandas>=2.0",
+  "plotly>=5.0",
 ]
 
 [tool.setuptools.packages.find]

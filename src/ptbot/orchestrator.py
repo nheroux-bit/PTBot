@@ -10,8 +10,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, cast
 
+from . import db as _db
 from .models import AgentRunResult, AgentTask, DealCandidate, PipelinePaths, ResearchParams
 from .prompt_builder import build_pass1_tasks, build_pass2_tasks, build_qc_prompt
+from .runners import run_local_agent as _run_local_agent
 
 Runner = Callable[[str, int], dict[str, Any]]
 
@@ -84,14 +86,71 @@ def extract_json_array(text: str) -> list[dict[str, Any]]:
     return []
 
 
+def _normalize_deal_dict(item: dict[str, Any]) -> dict[str, Any]:
+    """Coerce agent-output deal fields to their expected types before validation.
+
+    Agents return inconsistent types for several fields.  This normaliser
+    fixes the most common mismatches without touching the frozen DealCandidate
+    model:
+
+    - deal_value / date: numeric or non-string → str
+    - multiples_disclosed / computed_multiples_available: any non-bool.
+      When a list is received in a bool field the agent has accidentally put
+      multiples data there; the list is merged into the ``multiples`` field
+      and the bool is set to True.
+    """
+    result = dict(item)
+
+    # String fields that agents sometimes return as numbers
+    for str_field in ("deal_value", "date"):
+        val = result.get(str_field)
+        if val is not None and not isinstance(val, str):
+            result[str_field] = str(val)
+
+    # Bool fields that agents sometimes return as lists of multiples strings
+    for bool_field in ("multiples_disclosed", "computed_multiples_available"):
+        val = result.get(bool_field)
+        if val is None or isinstance(val, bool):
+            continue
+        if isinstance(val, list):
+            # Merge the misplaced multiples into the multiples field
+            existing = result.get("multiples") or []
+            if isinstance(existing, (list, tuple)):
+                merged = list(existing) + [str(v) for v in val if v]
+            else:
+                merged = [str(v) for v in val if v]
+            result["multiples"] = merged
+            result[bool_field] = True
+        else:
+            result[bool_field] = bool(val)
+
+    return result
+
+
 def candidates_from_results(results: dict[str, AgentRunResult]) -> list[DealCandidate]:
-    """Parse deal candidates from all successful Pass 1 scout outputs."""
+    """Parse deal candidates from all successful Pass 1 scout outputs.
+
+    Silently drops:
+    - Dicts missing required ``target`` / ``acquirer`` keys (metadata objects
+      that agents occasionally include alongside deal records).
+    - Dicts that fail pydantic validation after normalisation (logged to stderr
+      so they are visible but do not abort the pipeline).
+    """
+    import sys
+
+    from pydantic import ValidationError
+
     candidates: list[DealCandidate] = []
     for result in results.values():
         if result.state != "SUCCEEDED":
             continue
         for item in extract_json_array(result.output):
-            candidates.append(DealCandidate.model_validate(item))
+            if "target" not in item or "acquirer" not in item:
+                continue  # skip metadata / header objects
+            try:
+                candidates.append(DealCandidate.model_validate(_normalize_deal_dict(item)))
+            except ValidationError as exc:
+                print(f"[ptbot] skipping malformed deal record: {exc}", file=sys.stderr)
     return candidates
 
 
@@ -147,15 +206,35 @@ def write_json(path: Path, payload: object) -> None:
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
+def _load_default_runner() -> Runner:
+    """Return the best available local runner.
+
+    Tries to load the attack.market runner first (for backward compatibility
+    with existing local setups), then falls back to the self-contained
+    ``runners.run_local_agent`` implementation so PTBot works in cloud
+    environments where the attack.market skill is not installed.
+    """
+    try:
+        return load_attack_market_runner()
+    except (FileNotFoundError, ImportError):
+        return _run_local_agent
+
+
 def run_pipeline(
     params: ResearchParams,
     output_dir: Path,
     *,
     runner: Runner | None = None,
     timeout: int = 900,
+    db_path: Path | None = None,
 ) -> PipelinePaths:
-    """Run the full two-pass pipeline and write markdown/JSON outputs."""
-    active_runner = runner or load_attack_market_runner()
+    """Run the full two-pass pipeline and write markdown/JSON outputs.
+
+    When a cloud runner (from runners.make_cloud_runner with registry_db_path)
+    is supplied, every individual oz cloud dispatch is registered in the
+    cloud control plane (cloud-control-001) for kill/status observability.
+    """
+    active_runner = runner or _load_default_runner()
     supporting_dir = output_dir / "supporting"
     metadata_dir = output_dir / "metadata"
     supporting_dir.mkdir(parents=True, exist_ok=True)
@@ -167,7 +246,16 @@ def run_pipeline(
     (supporting_dir / "pass1_compiled_deals.md").write_text(pass1_compiled, encoding="utf-8")
 
     candidates = candidates_from_results(pass1_results)
-    qualified = filter_qualified_deals(dedupe_deals(candidates), params.min_multiples)
+    deduped = dedupe_deals(candidates)
+    qualified = filter_qualified_deals(deduped, params.min_multiples)
+
+    if db_path is not None:
+        conn = _db.open_db(db_path)
+        run_id = _db.new_run_id()
+        _db.insert_run(conn, run_id, params)
+        _db.insert_deals(conn, run_id, deduped, qualified_keys={d.key() for d in qualified})
+        conn.close()
+
     qualified_payload = [deal.model_dump(mode="json") for deal in qualified]
     qualified_path = supporting_dir / "qualified_deals.json"
     write_json(qualified_path, qualified_payload)
