@@ -259,7 +259,13 @@ def test_run_sweep_cloud_environment_passed_to_runner(tmp_path: Path) -> None:
             cloud_environment="env-xyz",
         )
 
-    mock_make_runner.assert_called_once_with(environment="env-xyz")
+    from unittest.mock import ANY
+
+    mock_make_runner.assert_called_once_with(
+        environment="env-xyz",
+        registry_db_path=ANY,
+        parent_context=ANY,
+    )
 
 
 def test_run_sweep_s3_pull_called_before_skip_detection(tmp_path: Path) -> None:

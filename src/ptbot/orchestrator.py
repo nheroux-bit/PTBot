@@ -228,7 +228,12 @@ def run_pipeline(
     timeout: int = 900,
     db_path: Path | None = None,
 ) -> PipelinePaths:
-    """Run the full two-pass pipeline and write markdown/JSON outputs."""
+    """Run the full two-pass pipeline and write markdown/JSON outputs.
+
+    When a cloud runner (from runners.make_cloud_runner with registry_db_path)
+    is supplied, every individual oz cloud dispatch is registered in the
+    cloud control plane (cloud-control-001) for kill/status observability.
+    """
     active_runner = runner or _load_default_runner()
     supporting_dir = output_dir / "supporting"
     metadata_dir = output_dir / "metadata"
