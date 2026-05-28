@@ -5,7 +5,7 @@
   },
   "plan": {
     "title": "Sector presets — full-coverage startup-tech database bootstrap",
-    "status": "running",
+    "status": "completed",
     "summary": "Ship a curated list of tech startup sectors and a --preset flag on sweep:auto so one command progressively builds comprehensive M&A coverage across the entire startup ecosystem. A single `ptbot sweep:auto --preset startup-tech --geography 'United States' --environment <env>` sweeps all ~35 sectors over the configured years, filling gaps as it goes.",
     "motivation": "The database gets exponentially more useful as coverage expands across sectors. Today users have to manually enumerate sectors. A preset bakes in the industry knowledge — every major tech vertical is covered — and lets the sweep run unattended, picking up where it left off on each execution. Run it weekly and the database self-maintains.",
     "deliverables": [
@@ -68,6 +68,6 @@
       "Consumer Tech",
       "Semiconductors"
     ],
-    "updated": "2026-05-27T22:28:44Z"
+    "updated": "2026-05-28T13:56:44Z"
   }
 }
