@@ -1,0 +1,73 @@
+{
+  "vBRIEFInfo": {
+    "version": "0.6",
+    "updated": "2026-05-27T22:28:44Z"
+  },
+  "plan": {
+    "title": "Sector presets — full-coverage startup-tech database bootstrap",
+    "status": "running",
+    "summary": "Ship a curated list of tech startup sectors and a --preset flag on sweep:auto so one command progressively builds comprehensive M&A coverage across the entire startup ecosystem. A single `ptbot sweep:auto --preset startup-tech --geography 'United States' --environment <env>` sweeps all ~35 sectors over the configured years, filling gaps as it goes.",
+    "motivation": "The database gets exponentially more useful as coverage expands across sectors. Today users have to manually enumerate sectors. A preset bakes in the industry knowledge — every major tech vertical is covered — and lets the sweep run unattended, picking up where it left off on each execution. Run it weekly and the database self-maintains.",
+    "deliverables": [
+      "sectors/ directory at project root with curated JSON preset files",
+      "sectors/startup-tech.json: ~35 tech startup verticals (FinTech, HealthTech, AI/ML, Cybersecurity, SaaS, DevTools, CleanTech, etc.) each with a canonical name and optional aliases",
+      "--preset NAME flag on ptbot sweep:auto that loads sectors from sectors/{name}.json instead of --sectors CSV. Mutually exclusive with --sectors.",
+      "ptbot db:coverage command: prints a coverage table showing which sector×year combinations exist in the DB vs. are missing. Helps operators see what the next sweep will fill in.",
+      "startup-sectors.toml: ready-to-use ptbot-sweep TOML config referencing all startup-tech sectors for users who prefer the TOML runner",
+      "Tests covering: preset loading, unknown preset error, coverage command with seeded DB, sweep:auto --preset dry-run",
+      "README section: ## Building full-sector coverage with examples",
+      "CHANGELOG entry",
+      "Passes task check"
+    ],
+    "constraints": [
+      "No new runtime dependencies",
+      "Preset files are plain JSON — no external data sources required",
+      "sectors/ ships with the package so presets work after pip install",
+      "Frozen models — do not change DealCandidate or ResearchParams",
+      "--preset and --sectors are mutually exclusive; both missing is an error",
+      "ptbot db:coverage must work gracefully when the DB does not exist yet"
+    ],
+    "startup_tech_sectors": [
+      "FinTech",
+      "Payments",
+      "InsurTech",
+      "WealthTech",
+      "HealthTech",
+      "Digital Health",
+      "BioTech",
+      "AI / Machine Learning",
+      "Data & Analytics",
+      "MLOps",
+      "Cybersecurity",
+      "Cloud Infrastructure",
+      "DevTools",
+      "Vertical SaaS",
+      "Horizontal SaaS",
+      "Enterprise Software",
+      "E-commerce",
+      "Retail Tech",
+      "MarTech",
+      "AdTech",
+      "Logistics",
+      "Supply Chain Tech",
+      "EdTech",
+      "HRTech",
+      "LegalTech",
+      "PropTech",
+      "CleanTech",
+      "Climate Tech",
+      "AgriTech",
+      "Gaming",
+      "Media Tech",
+      "TravelTech",
+      "FoodTech",
+      "Robotics & Automation",
+      "Drones",
+      "SpaceTech",
+      "Crypto / Web3",
+      "Consumer Tech",
+      "Semiconductors"
+    ],
+    "updated": "2026-05-27T22:28:44Z"
+  }
+}
